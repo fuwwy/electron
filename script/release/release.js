@@ -5,30 +5,27 @@ if (!process.env.CI) require('dotenv-safe').load();
 const args = require('minimist')(process.argv.slice(2), {
   boolean: [
     'validateRelease',
-    'skipVersionCheck',
-    'automaticRelease',
     'verboseNugget'
   ],
   default: { verboseNugget: false }
 });
 const fs = require('fs');
 const { execSync } = require('child_process');
-const nugget = require('nugget');
 const got = require('got');
 const pkg = require('../../package.json');
 const pkgVersion = `v${pkg.version}`;
 const path = require('path');
-const sumchecker = require('sumchecker');
 const temp = require('temp').track();
 const { URL } = require('url');
+const { BlobServiceClient } = require('@azure/storage-blob');
 const { Octokit } = require('@octokit/rest');
-const AWS = require('aws-sdk');
 
 require('colors');
 const pass = '✓'.green;
 const fail = '✗'.red;
 
 const { ELECTRON_DIR } = require('../lib/utils');
+const getUrlHash = require('./get-url-hash');
 
 const octokit = new Octokit({
   auth: process.env.ELECTRON_GITHUB_TOKEN
@@ -64,7 +61,7 @@ async function getDraftRelease (version, skipValidation) {
 async function validateReleaseAssets (release, validatingRelease) {
   const requiredAssets = assetsForVersion(release.tag_name, validatingRelease).sort();
   const extantAssets = release.assets.map(asset => asset.name).sort();
-  const downloadUrls = release.assets.map(asset => asset.browser_download_url).sort();
+  const downloadUrls = release.assets.map(asset => ({ url: asset.browser_download_url, file: asset.name })).sort((a, b) => a.file.localeCompare(b.file));
 
   failureCount = 0;
   requiredAssets.forEach(asset => {
@@ -74,15 +71,15 @@ async function validateReleaseAssets (release, validatingRelease) {
 
   if (!validatingRelease || !release.draft) {
     if (release.draft) {
-      await verifyAssets(release);
+      await verifyDraftGitHubReleaseAssets(release);
     } else {
-      await verifyShasums(downloadUrls)
+      await verifyShasumsForRemoteFiles(downloadUrls)
         .catch(err => {
           console.log(`${fail} error verifyingShasums`, err);
         });
     }
-    const s3Urls = s3UrlsForVersion(release.tag_name);
-    await verifyShasums(s3Urls, true);
+    const azRemoteFiles = azRemoteFilesForVersion(release.tag_name);
+    await verifyShasumsForRemoteFiles(azRemoteFiles, true);
   }
 }
 
@@ -142,6 +139,12 @@ function assetsForVersion (version, validatingRelease) {
     'electron-api.json',
     'electron.d.ts',
     'hunspell_dictionaries.zip',
+    'libcxx_headers.zip',
+    'libcxxabi_headers.zip',
+    `libcxx-objects-${version}-linux-arm64.zip`,
+    `libcxx-objects-${version}-linux-armv7l.zip`,
+    `libcxx-objects-${version}-linux-ia32.zip`,
+    `libcxx-objects-${version}-linux-x64.zip`,
     `ffmpeg-${version}-darwin-x64.zip`,
     `ffmpeg-${version}-darwin-arm64.zip`,
     `ffmpeg-${version}-linux-arm64.zip`,
@@ -174,21 +177,30 @@ function assetsForVersion (version, validatingRelease) {
   return patterns;
 }
 
-function s3UrlsForVersion (version) {
-  const bucket = 'https://gh-contractor-zcbenz.s3.amazonaws.com/';
-  const patterns = [
-    `${bucket}atom-shell/dist/${version}/iojs-${version}-headers.tar.gz`,
-    `${bucket}atom-shell/dist/${version}/iojs-${version}.tar.gz`,
-    `${bucket}atom-shell/dist/${version}/node-${version}.tar.gz`,
-    `${bucket}atom-shell/dist/${version}/node.lib`,
-    `${bucket}atom-shell/dist/${version}/win-x64/iojs.lib`,
-    `${bucket}atom-shell/dist/${version}/win-x86/iojs.lib`,
-    `${bucket}atom-shell/dist/${version}/x64/node.lib`,
-    `${bucket}atom-shell/dist/${version}/SHASUMS.txt`,
-    `${bucket}atom-shell/dist/${version}/SHASUMS256.txt`,
-    `${bucket}atom-shell/dist/index.json`
-  ];
-  return patterns;
+const cloudStoreFilePaths = (version) => [
+  `iojs-${version}-headers.tar.gz`,
+  `iojs-${version}.tar.gz`,
+  `node-${version}.tar.gz`,
+  'node.lib',
+  'x64/node.lib',
+  'win-x64/iojs.lib',
+  'win-x86/iojs.lib',
+  'win-arm64/iojs.lib',
+  'win-x64/node.lib',
+  'win-x86/node.lib',
+  'win-arm64/node.lib',
+  'arm64/node.lib',
+  'SHASUMS.txt',
+  'SHASUMS256.txt'
+];
+
+function azRemoteFilesForVersion (version) {
+  const azCDN = 'https://artifacts.electronjs.org/headers/';
+  const versionPrefix = `${azCDN}dist/${version}/`;
+  return cloudStoreFilePaths(version).map((filePath) => ({
+    file: filePath,
+    url: `${versionPrefix}${filePath}`
+  }));
 }
 
 function runScript (scriptName, scriptArgs, cwd) {
@@ -206,49 +218,39 @@ function runScript (scriptName, scriptArgs, cwd) {
 }
 
 function uploadNodeShasums () {
-  console.log('Uploading Node SHASUMS file to S3.');
+  console.log('Uploading Node SHASUMS file to artifacts.electronjs.org.');
   const scriptPath = path.join(ELECTRON_DIR, 'script', 'release', 'uploaders', 'upload-node-checksums.py');
   runScript(scriptPath, ['-v', pkgVersion]);
-  console.log(`${pass} Done uploading Node SHASUMS file to S3.`);
+  console.log(`${pass} Done uploading Node SHASUMS file to artifacts.electronjs.org.`);
 }
 
 function uploadIndexJson () {
-  console.log('Uploading index.json to S3.');
+  console.log('Uploading index.json to artifacts.electronjs.org.');
   const scriptPath = path.join(ELECTRON_DIR, 'script', 'release', 'uploaders', 'upload-index-json.py');
   runScript(scriptPath, [pkgVersion]);
-  console.log(`${pass} Done uploading index.json to S3.`);
+  console.log(`${pass} Done uploading index.json to artifacts.electronjs.org.`);
 }
 
 async function mergeShasums (pkgVersion) {
-  // Download individual checksum files for Electron zip files from S3,
+  // Download individual checksum files for Electron zip files from artifact storage,
   // concatenate them, and upload to GitHub.
 
-  const bucket = process.env.ELECTRON_S3_BUCKET;
-  const accessKeyId = process.env.ELECTRON_S3_ACCESS_KEY;
-  const secretAccessKey = process.env.ELECTRON_S3_SECRET_KEY;
-  if (!bucket || !accessKeyId || !secretAccessKey) {
-    throw new Error('Please set the $ELECTRON_S3_BUCKET, $ELECTRON_S3_ACCESS_KEY, and $ELECTRON_S3_SECRET_KEY environment variables');
+  const connectionString = process.env.ELECTRON_ARTIFACTS_BLOB_STORAGE;
+  if (!connectionString) {
+    throw new Error('Please set the $ELECTRON_ARTIFACTS_BLOB_STORAGE environment variable');
   }
 
-  const s3 = new AWS.S3({
-    apiVersion: '2006-03-01',
-    accessKeyId,
-    secretAccessKey,
-    region: 'us-west-2'
+  const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+  const containerClient = blobServiceClient.getContainerClient('checksums-scratchpad');
+  const blobsIter = containerClient.listBlobsFlat({
+    prefix: `${pkgVersion}/`
   });
-  const objects = await s3.listObjectsV2({
-    Bucket: bucket,
-    Prefix: `atom-shell/tmp/${pkgVersion}/`,
-    Delimiter: '/'
-  }).promise();
   const shasums = [];
-  for (const obj of objects.Contents) {
-    if (obj.Key.endsWith('.sha256sum')) {
-      const data = await s3.getObject({
-        Bucket: bucket,
-        Key: obj.Key
-      }).promise();
-      shasums.push(data.Body.toString('ascii').trim());
+  for await (const blob of blobsIter) {
+    if (blob.name.endsWith('.sha256sum')) {
+      const blobClient = containerClient.getBlockBlobClient(blob.name);
+      const response = await blobClient.downloadToBuffer();
+      shasums.push(response.toString('ascii').trim());
     }
   }
   return shasums.join('\n');
@@ -366,14 +368,14 @@ async function makeTempDir () {
   });
 }
 
-async function verifyAssets (release) {
-  const downloadDir = await makeTempDir();
+const SHASUM_256_FILENAME = 'SHASUMS256.txt';
+const SHASUM_1_FILENAME = 'SHASUMS.txt';
 
-  console.log('Downloading files from GitHub to verify shasums');
-  const shaSumFile = 'SHASUMS256.txt';
+async function verifyDraftGitHubReleaseAssets (release) {
+  console.log('Fetching authenticated GitHub artifact URLs to verify shasums');
 
-  let filesToCheck = await Promise.all(release.assets.map(async asset => {
-    const requestOptions = await octokit.repos.getReleaseAsset.endpoint({
+  const remoteFilesToHash = await Promise.all(release.assets.map(async asset => {
+    const requestOptions = octokit.repos.getReleaseAsset.endpoint({
       owner: 'electron',
       repo: targetRepo,
       asset_id: asset.id,
@@ -391,137 +393,63 @@ async function verifyAssets (release) {
       headers
     });
 
-    await downloadFiles(response.headers.location, downloadDir, asset.name);
-    return asset.name;
+    return { url: response.headers.location, file: asset.name };
   })).catch(err => {
     console.log(`${fail} Error downloading files from GitHub`, err);
     process.exit(1);
   });
 
-  filesToCheck = filesToCheck.filter(fileName => fileName !== shaSumFile);
-  let checkerOpts;
-  await validateChecksums({
-    algorithm: 'sha256',
-    filesToCheck,
-    fileDirectory: downloadDir,
-    shaSumFile,
-    checkerOpts,
-    fileSource: 'GitHub'
-  });
+  await verifyShasumsForRemoteFiles(remoteFilesToHash);
 }
 
-function downloadFiles (urls, directory, targetName) {
-  return new Promise((resolve, reject) => {
-    const nuggetOpts = { dir: directory };
-    nuggetOpts.quiet = !args.verboseNugget;
-    if (targetName) nuggetOpts.target = targetName;
-
-    nugget(urls, nuggetOpts, (err) => {
-      if (err) {
-        reject(err);
-      } else {
-        console.log(`${pass} all files downloaded successfully!`);
-        resolve();
-      }
-    });
-  });
+async function getShaSumMappingFromUrl (shaSumFileUrl, fileNamePrefix) {
+  const response = await got(shaSumFileUrl);
+  const raw = response.body;
+  return raw.split('\n').map(line => line.trim()).filter(Boolean).reduce((map, line) => {
+    const [sha, file] = line.replace('  ', ' ').split(' ');
+    map[file.slice(fileNamePrefix.length)] = sha;
+    return map;
+  }, {});
 }
 
-async function verifyShasums (urls, isS3) {
-  const fileSource = isS3 ? 'S3' : 'GitHub';
-  console.log(`Downloading files from ${fileSource} to verify shasums`);
-  const downloadDir = await makeTempDir();
-  let filesToCheck = [];
-  try {
-    if (!isS3) {
-      await downloadFiles(urls, downloadDir);
-      filesToCheck = urls.map(url => {
-        const currentUrl = new URL(url);
-        return path.basename(currentUrl.pathname);
-      }).filter(file => file.indexOf('SHASUMS') === -1);
-    } else {
-      const s3VersionPath = `/atom-shell/dist/${pkgVersion}/`;
-      await Promise.all(urls.map(async (url) => {
-        const currentUrl = new URL(url);
-        const dirname = path.dirname(currentUrl.pathname);
-        const filename = path.basename(currentUrl.pathname);
-        const s3VersionPathIdx = dirname.indexOf(s3VersionPath);
-        if (s3VersionPathIdx === -1 || dirname === s3VersionPath) {
-          if (s3VersionPathIdx !== -1 && filename.indexof('SHASUMS') === -1) {
-            filesToCheck.push(filename);
-          }
-          await downloadFiles(url, downloadDir);
-        } else {
-          const subDirectory = dirname.substr(s3VersionPathIdx + s3VersionPath.length);
-          const fileDirectory = path.join(downloadDir, subDirectory);
-          try {
-            fs.statSync(fileDirectory);
-          } catch (err) {
-            fs.mkdirSync(fileDirectory);
-          }
-          filesToCheck.push(path.join(subDirectory, filename));
-          await downloadFiles(url, fileDirectory);
-        }
-      }));
-    }
-  } catch (err) {
-    console.log(`${fail} Error downloading files from ${fileSource}`, err);
+async function validateFileHashesAgainstShaSumMapping (remoteFilesWithHashes, mapping) {
+  for (const remoteFileWithHash of remoteFilesWithHashes) {
+    check(remoteFileWithHash.hash === mapping[remoteFileWithHash.file], `Release asset ${remoteFileWithHash.file} should have hash of ${mapping[remoteFileWithHash.file]} but found ${remoteFileWithHash.hash}`, true);
+  }
+}
+
+async function verifyShasumsForRemoteFiles (remoteFilesToHash, filesAreNodeJSArtifacts = false) {
+  console.log(`Generating SHAs for ${remoteFilesToHash.length} files to verify shasums`);
+
+  // Only used for node.js artifact uploads
+  const shaSum1File = remoteFilesToHash.find(({ file }) => file === SHASUM_1_FILENAME);
+  // Used for both node.js artifact uploads and normal electron artifacts
+  const shaSum256File = remoteFilesToHash.find(({ file }) => file === SHASUM_256_FILENAME);
+  remoteFilesToHash = remoteFilesToHash.filter(({ file }) => file !== SHASUM_1_FILENAME && file !== SHASUM_256_FILENAME);
+
+  const remoteFilesWithHashes = await Promise.all(remoteFilesToHash.map(async (file) => {
+    return {
+      hash: await getUrlHash(file.url, 'sha256'),
+      ...file
+    };
+  }));
+
+  await validateFileHashesAgainstShaSumMapping(remoteFilesWithHashes, await getShaSumMappingFromUrl(shaSum256File.url, filesAreNodeJSArtifacts ? '' : '*'));
+
+  if (filesAreNodeJSArtifacts) {
+    const remoteFilesWithSha1Hashes = await Promise.all(remoteFilesToHash.map(async (file) => {
+      return {
+        hash: await getUrlHash(file.url, 'sha1'),
+        ...file
+      };
+    }));
+
+    await validateFileHashesAgainstShaSumMapping(remoteFilesWithSha1Hashes, await getShaSumMappingFromUrl(shaSum1File.url, filesAreNodeJSArtifacts ? '' : '*'));
+  }
+}
+
+makeRelease(args.validateRelease)
+  .catch((err) => {
+    console.error('Error occurred while making release:', err);
     process.exit(1);
-  }
-  console.log(`${pass} Successfully downloaded the files from ${fileSource}.`);
-  let checkerOpts;
-  if (isS3) {
-    checkerOpts = { defaultTextEncoding: 'binary' };
-  }
-
-  await validateChecksums({
-    algorithm: 'sha256',
-    filesToCheck,
-    fileDirectory: downloadDir,
-    shaSumFile: 'SHASUMS256.txt',
-    checkerOpts,
-    fileSource
   });
-
-  if (isS3) {
-    await validateChecksums({
-      algorithm: 'sha1',
-      filesToCheck,
-      fileDirectory: downloadDir,
-      shaSumFile: 'SHASUMS.txt',
-      checkerOpts,
-      fileSource
-    });
-  }
-}
-
-async function validateChecksums (validationArgs) {
-  console.log(`Validating checksums for files from ${validationArgs.fileSource} ` +
-    `against ${validationArgs.shaSumFile}.`);
-  const shaSumFilePath = path.join(validationArgs.fileDirectory, validationArgs.shaSumFile);
-  const checker = new sumchecker.ChecksumValidator(validationArgs.algorithm,
-    shaSumFilePath, validationArgs.checkerOpts);
-  await checker.validate(validationArgs.fileDirectory, validationArgs.filesToCheck)
-    .catch(err => {
-      if (err instanceof sumchecker.ChecksumMismatchError) {
-        console.error(`${fail} The checksum of ${err.filename} from ` +
-          `${validationArgs.fileSource} did not match the shasum in ` +
-          `${validationArgs.shaSumFile}`);
-      } else if (err instanceof sumchecker.ChecksumParseError) {
-        console.error(`${fail} The checksum file ${validationArgs.shaSumFile} ` +
-          `from ${validationArgs.fileSource} could not be parsed.`, err);
-      } else if (err instanceof sumchecker.NoChecksumFoundError) {
-        console.error(`${fail} The file ${err.filename} from ` +
-          `${validationArgs.fileSource} was not in the shasum file ` +
-          `${validationArgs.shaSumFile}.`);
-      } else {
-        console.error(`${fail} Error matching files from ` +
-          `${validationArgs.fileSource} shasums in ${validationArgs.shaSumFile}.`, err);
-      }
-      process.exit(1);
-    });
-  console.log(`${pass} All files from ${validationArgs.fileSource} match ` +
-    `shasums defined in ${validationArgs.shaSumFile}.`);
-}
-
-makeRelease(args.validateRelease);

@@ -1,18 +1,18 @@
-const { getWebPreference } = process._linkedBinding('electron_renderer_web_frame');
+const { mainFrame } = process._linkedBinding('electron_renderer_web_frame');
 const binding = process._linkedBinding('electron_renderer_context_bridge');
 
-const contextIsolationEnabled = getWebPreference(window, 'contextIsolation');
+const contextIsolationEnabled = mainFrame.getWebPreference('contextIsolation');
 
 const checkContextIsolationEnabled = () => {
   if (!contextIsolationEnabled) throw new Error('contextBridge API can only be used when contextIsolation is enabled');
 };
 
 const contextBridge: Electron.ContextBridge = {
-  exposeInMainWorld: (key: string, api: Record<string, any>) => {
+  exposeInMainWorld: (key: string, api: any) => {
     checkContextIsolationEnabled();
     return binding.exposeAPIInMainWorld(key, api);
   }
-} as any;
+};
 
 export default contextBridge;
 

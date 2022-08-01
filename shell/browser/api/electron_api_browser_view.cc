@@ -78,8 +78,17 @@ BrowserView::BrowserView(gin::Arguments* args,
       gin::Dictionary::CreateEmpty(isolate);
   options.Get(options::kWebPreferences, &web_preferences);
   web_preferences.Set("type", "browserView");
-  gin::Handle<class WebContents> web_contents =
-      WebContents::Create(isolate, web_preferences);
+
+  v8::Local<v8::Value> value;
+
+  // Copy the webContents option to webPreferences. This is only used internally
+  // to implement nativeWindowOpen option.
+  if (options.Get("webContents", &value)) {
+    web_preferences.SetHidden("webContents", value);
+  }
+
+  auto web_contents =
+      WebContents::CreateFromWebPreferences(args->isolate(), web_preferences);
 
   web_contents_.Reset(isolate, web_contents.ToV8());
   api_web_contents_ = web_contents.get();
@@ -87,15 +96,21 @@ BrowserView::BrowserView(gin::Arguments* args,
   Observe(web_contents->web_contents());
 
   view_.reset(
-      NativeBrowserView::Create(api_web_contents_->managed_web_contents()));
+      NativeBrowserView::Create(api_web_contents_->inspectable_web_contents()));
+}
+
+void BrowserView::SetOwnerWindow(NativeWindow* window) {
+  // Ensure WebContents and BrowserView owner windows are in sync.
+  if (web_contents())
+    web_contents()->SetOwnerWindow(window);
+
+  owner_window_ = window ? window->GetWeakPtr() : nullptr;
 }
 
 BrowserView::~BrowserView() {
-  if (api_web_contents_) {  // destroy() is called
-    // Destroy WebContents asynchronously unless app is shutting down,
-    // because destroy() might be called inside WebContents's event handler.
-    api_web_contents_->RemoveObserver(this);
-    api_web_contents_->DestroyWebContents(!Browser::Get()->is_shutting_down());
+  if (web_contents()) {  // destroy() called without closing WebContents
+    web_contents()->RemoveObserver(this);
+    web_contents()->Destroy();
   }
 }
 
@@ -141,6 +156,11 @@ gfx::Rect BrowserView::GetBounds() {
 
 void BrowserView::SetBackgroundColor(const std::string& color_name) {
   view_->SetBackgroundColor(ParseHexColor(color_name));
+
+  if (web_contents()) {
+    auto* wc = web_contents()->web_contents();
+    wc->SetPageBaseBackgroundColor(ParseHexColor(color_name));
+  }
 }
 
 v8::Local<v8::Value> BrowserView::GetWebContents(v8::Isolate* isolate) {

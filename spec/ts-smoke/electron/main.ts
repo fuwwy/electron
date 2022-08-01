@@ -172,7 +172,6 @@ app.whenReady().then(() => {
 app.getLocale()
 
 // Desktop environment integration
-// https://github.com/electron/electron/blob/master/docs/tutorial/desktop-environment-integration.md
 
 app.addRecentDocument('/Users/USERNAME/Desktop/work.type')
 app.clearRecentDocuments()
@@ -373,6 +372,12 @@ if (process.platform === 'win32') {
   console.log('Color for menu is', systemPreferences.getColor('menu'))
 }
 
+if (process.platform === 'darwin') {
+  const value: string = systemPreferences.getUserDefault('Foo', 'string');
+  // @ts-expect-error
+  const value2: number = systemPreferences.getUserDefault('Foo', 'boolean');
+}
+
 // Create the window.
 const win1 = new BrowserWindow(browserOptions)
 
@@ -461,8 +466,6 @@ window.setVibrancy('titlebar')
 window.setVibrancy('selection')
 window.setVibrancy('popover')
 window.setIcon('/path/to/icon')
-
-const installed = BrowserWindow.getDevToolsExtensions().hasOwnProperty('devtron')
 
 // content-tracing
 // https://github.com/electron/electron/blob/master/docs/api/content-tracing.md
@@ -1051,7 +1054,7 @@ app.whenReady().then(() => {
 // https://github.com/electron/electron/blob/master/docs/api/shell.md
 
 shell.showItemInFolder('/home/user/Desktop/test.txt')
-shell.moveItemToTrash('/home/user/Desktop/test.txt')
+shell.trashItem('/home/user/Desktop/test.txt').then(() => {})
 
 shell.openPath('/home/user/Desktop/test.txt').then(err => {
   if (err) console.log(err)
@@ -1100,7 +1103,7 @@ shell.writeShortcutLink('/home/user/Desktop/shortcut.lnk', 'update', shell.readS
 
 session.defaultSession.on('will-download', (event, item, webContents) => {
   event.preventDefault()
-  require('request')(item.getURL(), (data: any) => {
+  require('got')(item.getURL()).then((data: any) => {
     require('fs').writeFileSync('/somewhere', data)
   })
 })

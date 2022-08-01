@@ -106,6 +106,12 @@ class Promise : public PromiseBase {
     return resolved.GetHandle();
   }
 
+  // Convert to another type.
+  template <typename NT>
+  Promise<NT> As() {
+    return Promise<NT>(isolate(), GetInner());
+  }
+
   // Promise resolution is a microtask
   // We use the MicrotasksRunner to trigger the running of pending microtasks
   v8::Maybe<bool> Resolve(const RT& value) {
@@ -133,7 +139,7 @@ class Promise : public PromiseBase {
     v8::Context::Scope context_scope(GetContext());
 
     v8::Local<v8::Value> value = gin::ConvertToV8(isolate(), std::move(cb));
-    v8::Local<v8::Function> handler = v8::Local<v8::Function>::Cast(value);
+    v8::Local<v8::Function> handler = value.As<v8::Function>();
 
     return GetHandle()->Then(GetContext(), handler);
   }

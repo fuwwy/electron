@@ -28,18 +28,29 @@ function sanitizeOptionsForGuest (options: Record<string, any>) {
   return ret;
 }
 
+function makeLoadURLOptions (params: Record<string, any>) {
+  const opts: Electron.LoadURLOptions = {};
+  if (params.httpreferrer) {
+    opts.httpReferrer = params.httpreferrer;
+  }
+  if (params.useragent) {
+    opts.userAgent = params.useragent;
+  }
+  return opts;
+}
+
 // Create a new guest instance.
 const createGuest = function (embedder: Electron.WebContents, params: Record<string, any>) {
   // eslint-disable-next-line no-undef
   const guest = (webContents as typeof ElectronInternal.WebContents).create({
     type: 'webview',
     partition: params.partition,
-    embedder: embedder
+    embedder
   });
   const guestInstanceId = guest.id;
   guestInstances.set(guestInstanceId, {
-    guest: guest,
-    embedder: embedder
+    guest,
+    embedder
   });
 
   // Clear the guest from map when it is destroyed.
@@ -51,7 +62,7 @@ const createGuest = function (embedder: Electron.WebContents, params: Record<str
 
   // Init guest web view after attached.
   guest.once('did-attach' as any, function (this: Electron.WebContents, event: Electron.Event) {
-    params = this.attachParams!;
+    const params = this.attachParams!;
     delete this.attachParams;
 
     const previouslyAttached = this.viewInstanceId != null;
@@ -63,14 +74,7 @@ const createGuest = function (embedder: Electron.WebContents, params: Record<str
     }
 
     if (params.src) {
-      const opts: Electron.LoadURLOptions = {};
-      if (params.httpreferrer) {
-        opts.httpReferrer = params.httpreferrer;
-      }
-      if (params.useragent) {
-        opts.userAgent = params.useragent;
-      }
-      this.loadURL(params.src, opts);
+      this.loadURL(params.src, params.opts);
     }
     embedder.emit('did-attach-webview', event, guest);
   });
@@ -100,8 +104,12 @@ const createGuest = function (embedder: Electron.WebContents, params: Record<str
   });
 
   // Dispatch guest's IPC messages to embedder.
-  guest.on('ipc-message-host' as any, function (_: Electron.Event, channel: string, args: any[]) {
-    sendToEmbedder(IPC_MESSAGES.GUEST_VIEW_INTERNAL_IPC_MESSAGE, channel, ...args);
+  guest.on('ipc-message-host' as any, function (event: Electron.IpcMainEvent, channel: string, args: any[]) {
+    sendToEmbedder(IPC_MESSAGES.GUEST_VIEW_INTERNAL_IPC_MESSAGE, {
+      frameId: [event.processId, event.frameId],
+      channel,
+      args
+    });
   });
 
   // Notify guest of embedder window visibility when it is ready
@@ -145,13 +153,15 @@ const attachGuest = function (event: Electron.IpcMainInvokeEvent,
     throw new Error(`Access denied to guestInstanceId: ${guestInstanceId}`);
   }
 
+  const { instanceId } = params;
+
   // If this guest is already attached to an element then remove it
   if (guestInstance.elementInstanceId) {
     const oldKey = `${guestInstance.embedder.id}-${guestInstance.elementInstanceId}`;
     embedderElementsMap.delete(oldKey);
 
     // Remove guest from embedder if moving across web views
-    if (guest.viewInstanceId !== params.instanceId) {
+    if (guest.viewInstanceId !== instanceId) {
       webViewManager.removeGuest(guestInstance.embedder, guestInstanceId);
       guestInstance.embedder._sendInternal(`${IPC_MESSAGES.GUEST_VIEW_INTERNAL_DESTROY_GUEST}-${guest.viewInstanceId}`);
     }
@@ -165,10 +175,9 @@ const attachGuest = function (event: Electron.IpcMainInvokeEvent,
       : null;
 
   const webPreferences: Electron.WebPreferences = {
-    guestInstanceId: guestInstanceId,
+    guestInstanceId,
     nodeIntegration: params.nodeintegration != null ? params.nodeintegration : false,
     nodeIntegrationInSubFrames: params.nodeintegrationinsubframes != null ? params.nodeintegrationinsubframes : false,
-    enableRemoteModule: params.enableremotemodule,
     plugins: params.plugins,
     zoomFactor: embedder.zoomFactor,
     disablePopups: !params.allowpopups,
@@ -188,7 +197,6 @@ const attachGuest = function (event: Electron.IpcMainInvokeEvent,
     ['javascript', false],
     ['nativeWindowOpen', true],
     ['nodeIntegration', false],
-    ['enableRemoteModule', false],
     ['sandbox', true],
     ['nodeIntegrationInSubFrames', false],
     ['enableWebSQL', false]
@@ -197,19 +205,19 @@ const attachGuest = function (event: Electron.IpcMainInvokeEvent,
   // Inherit certain option values from embedder
   const lastWebPreferences = embedder.getLastWebPreferences();
   for (const [name, value] of inheritedWebPreferences) {
-    if ((lastWebPreferences as any)[name] === value) {
+    if (lastWebPreferences[name as keyof Electron.WebPreferences] === value) {
       (webPreferences as any)[name] = value;
     }
   }
 
   embedder.emit('will-attach-webview', event, webPreferences, params);
   if (event.defaultPrevented) {
-    if (guest.viewInstanceId == null) guest.viewInstanceId = params.instanceId;
+    if (guest.viewInstanceId == null) guest.viewInstanceId = instanceId;
     guest.destroy();
     return;
   }
 
-  guest.attachParams = params;
+  guest.attachParams = { instanceId, src: params.src, opts: makeLoadURLOptions(params) };
   embedderElementsMap.set(key, guestInstanceId);
 
   guest.setEmbedder(embedder);
@@ -218,7 +226,7 @@ const attachGuest = function (event: Electron.IpcMainInvokeEvent,
 
   watchEmbedder(embedder);
 
-  webViewManager.addGuest(guestInstanceId, elementInstanceId, embedder, guest, webPreferences);
+  webViewManager.addGuest(guestInstanceId, embedder, guest, webPreferences);
   guest.attachToIframe(embedder, embedderFrameId);
 };
 
@@ -276,7 +284,7 @@ const watchEmbedder = function (embedder: Electron.WebContents) {
 
 const isWebViewTagEnabledCache = new WeakMap();
 
-export const isWebViewTagEnabled = function (contents: Electron.WebContents) {
+const isWebViewTagEnabled = function (contents: Electron.WebContents) {
   if (!isWebViewTagEnabledCache.has(contents)) {
     const webPreferences = contents.getLastWebPreferences() || {};
     isWebViewTagEnabledCache.set(contents, !!webPreferences.webviewTag);
@@ -321,13 +329,8 @@ handleMessageSync(IPC_MESSAGES.GUEST_VIEW_MANAGER_DETACH_GUEST, function (event,
 });
 
 // this message is sent by the actual <webview>
-ipcMainInternal.on(IPC_MESSAGES.GUEST_VIEW_MANAGER_FOCUS_CHANGE, function (event: ElectronInternal.IpcMainInternalEvent, focus: boolean, guestInstanceId: number) {
-  const guest = getGuest(guestInstanceId);
-  if (guest === event.sender) {
-    event.sender.emit('focus-change', {}, focus, guestInstanceId);
-  } else {
-    console.error(`focus-change for guestInstanceId: ${guestInstanceId}`);
-  }
+ipcMainInternal.on(IPC_MESSAGES.GUEST_VIEW_MANAGER_FOCUS_CHANGE, function (event: ElectronInternal.IpcMainInternalEvent, focus: boolean) {
+  event.sender.emit('-focus-change', {}, focus);
 });
 
 handleMessage(IPC_MESSAGES.GUEST_VIEW_MANAGER_CALL, function (event, guestInstanceId: number, method: string, args: any[]) {
@@ -374,18 +377,12 @@ handleMessage(IPC_MESSAGES.GUEST_VIEW_MANAGER_CAPTURE_PAGE, async function (even
 
 // Returns WebContents from its guest id hosted in given webContents.
 const getGuestForWebContents = function (guestInstanceId: number, contents: Electron.WebContents) {
-  const guest = getGuest(guestInstanceId);
-  if (!guest) {
+  const guestInstance = guestInstances.get(guestInstanceId);
+  if (!guestInstance) {
     throw new Error(`Invalid guestInstanceId: ${guestInstanceId}`);
   }
-  if (guest.hostWebContents !== contents) {
+  if (guestInstance.guest.hostWebContents !== contents) {
     throw new Error(`Access denied to guestInstanceId: ${guestInstanceId}`);
   }
-  return guest;
-};
-
-// Returns WebContents from its guest id.
-const getGuest = function (guestInstanceId: number) {
-  const guestInstance = guestInstances.get(guestInstanceId);
-  if (guestInstance != null) return guestInstance.guest;
+  return guestInstance.guest;
 };

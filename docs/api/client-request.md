@@ -2,7 +2,8 @@
 
 > Make HTTP/HTTPS requests.
 
-Process: [Main](../glossary.md#main-process)
+Process: [Main](../glossary.md#main-process)<br />
+_This class is not exported from the `'electron'` module. It is only available as a return value of other methods in the Electron API._
 
 `ClientRequest` implements the [Writable Stream](https://nodejs.org/api/stream.html#stream_writable_streams)
 interface and is therefore an [EventEmitter][event-emitter].
@@ -47,6 +48,7 @@ following properties:
     be aborted. When mode is `manual` the redirection will be cancelled unless
     [`request.followRedirect`](#requestfollowredirect) is invoked synchronously
     during the [`redirect`](#event-redirect) event.  Defaults to `follow`.
+  * `origin` String (optional) - The origin URL of the request.
 
 `options` properties such as `protocol`, `host`, `hostname`, `port` and `path`
 strictly follow the Node.js model as described in the
@@ -70,7 +72,7 @@ const request = net.request({
 
 Returns:
 
-* `response` IncomingMessage - An object representing the HTTP response message.
+* `response` [IncomingMessage](incoming-message.md) - An object representing the HTTP response message.
 
 #### Event: 'login'
 

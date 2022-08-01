@@ -8,18 +8,19 @@
 #include <string>
 
 #include "base/observer_list_types.h"
-#include "base/strings/string16.h"
 #include "base/values.h"
 #include "ui/base/window_open_disposition.h"
-#include "url/gurl.h"
 
 #if defined(OS_WIN)
 #include <windows.h>
 #endif
 
+class GURL;
+
 namespace gfx {
 class Rect;
-}
+enum class ResizeEdge;
+}  // namespace gfx
 
 namespace electron {
 
@@ -28,7 +29,7 @@ class NativeWindowObserver : public base::CheckedObserver {
   ~NativeWindowObserver() override {}
 
   // Called when the web page in window wants to create a popup window.
-  virtual void WillCreatePopupWindow(const base::string16& frame_name,
+  virtual void WillCreatePopupWindow(const std::u16string& frame_name,
                                      const GURL& target_url,
                                      const std::string& partition_id,
                                      WindowOpenDisposition disposition) {}
@@ -72,6 +73,7 @@ class NativeWindowObserver : public base::CheckedObserver {
   virtual void OnWindowMinimize() {}
   virtual void OnWindowRestore() {}
   virtual void OnWindowWillResize(const gfx::Rect& new_bounds,
+                                  const gfx::ResizeEdge& edge,
                                   bool* prevent_default) {}
   virtual void OnWindowResize() {}
   virtual void OnWindowResized() {}
@@ -103,6 +105,8 @@ class NativeWindowObserver : public base::CheckedObserver {
   // Called on Windows when App Commands arrive (WM_APPCOMMAND)
   // Some commands are implemented on on other platforms as well
   virtual void OnExecuteAppCommand(const std::string& command_name) {}
+
+  virtual void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) {}
 };
 
 }  // namespace electron

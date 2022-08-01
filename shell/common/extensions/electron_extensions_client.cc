@@ -30,8 +30,8 @@ namespace {
 class ElectronPermissionMessageProvider
     : public extensions::PermissionMessageProvider {
  public:
-  ElectronPermissionMessageProvider() {}
-  ~ElectronPermissionMessageProvider() override {}
+  ElectronPermissionMessageProvider() = default;
+  ~ElectronPermissionMessageProvider() override = default;
 
   // PermissionMessageProvider implementation.
   extensions::PermissionMessages GetPermissionMessages(
@@ -70,7 +70,7 @@ ElectronExtensionsClient::ElectronExtensionsClient()
   AddAPIProvider(std::make_unique<ElectronExtensionsAPIProvider>());
 }
 
-ElectronExtensionsClient::~ElectronExtensionsClient() {}
+ElectronExtensionsClient::~ElectronExtensionsClient() = default;
 
 void ElectronExtensionsClient::Initialize() {
   // TODO(jamescook): Do we need to whitelist any extensions?
@@ -130,9 +130,7 @@ const GURL& ElectronExtensionsClient::GetWebstoreUpdateURL() const {
 }
 
 bool ElectronExtensionsClient::IsBlacklistUpdateURL(const GURL& url) const {
-  // TODO(rockot): Maybe we want to do something else here. For now we accept
-  // any URL as a blacklist URL because we don't really care.
-  return true;
+  return false;
 }
 
 }  // namespace electron

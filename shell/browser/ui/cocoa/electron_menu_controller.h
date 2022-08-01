@@ -11,7 +11,6 @@
 #include "base/callback.h"
 #include "base/mac/scoped_nsobject.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string16.h"
 
 namespace electron {
 class ElectronMenuModel;
@@ -52,6 +51,10 @@ class ElectronMenuModel;
 // Access to the constructed menu if the complex initializer was used. If the
 // default initializer was used, then this will create the menu on first call.
 - (NSMenu*)menu;
+
+- (base::scoped_nsobject<NSMenuItem>)
+    makeMenuItemForIndex:(NSInteger)index
+               fromModel:(electron::ElectronMenuModel*)model;
 
 // Whether the menu is currently open.
 - (BOOL)isMenuOpen;

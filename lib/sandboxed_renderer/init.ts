@@ -1,7 +1,13 @@
-/* eslint no-eval: "off" */
 /* global binding */
 import * as events from 'events';
 import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
+
+import type * as ipcRendererUtilsModule from '@electron/internal/renderer/ipc-renderer-internal-utils';
+import type * as ipcRendererInternalModule from '@electron/internal/renderer/ipc-renderer-internal';
+import type * as webFrameInitModule from '@electron/internal/renderer/web-frame-init';
+import type * as webViewInitModule from '@electron/internal/renderer/web-view/web-view-init';
+import type * as windowSetupModule from '@electron/internal/renderer/window-setup';
+import type * as securityWarningsModule from '@electron/internal/renderer/security-warnings';
 
 const { EventEmitter } = events;
 
@@ -20,19 +26,10 @@ for (const prop of Object.keys(EventEmitter.prototype) as (keyof typeof process)
 }
 Object.setPrototypeOf(process, EventEmitter.prototype);
 
-const { ipcRendererInternal } = require('@electron/internal/renderer/ipc-renderer-internal');
-const ipcRendererUtils = require('@electron/internal/renderer/ipc-renderer-internal-utils');
+const { ipcRendererInternal } = require('@electron/internal/renderer/ipc-renderer-internal') as typeof ipcRendererInternalModule;
+const ipcRendererUtils = require('@electron/internal/renderer/ipc-renderer-internal-utils') as typeof ipcRendererUtilsModule;
 
-const {
-  preloadScripts,
-  isRemoteModuleEnabled,
-  isWebViewTagEnabled,
-  guestInstanceId,
-  openerId,
-  process: processProps
-} = ipcRendererUtils.invokeSync(IPC_MESSAGES.BROWSER_SANDBOX_LOAD);
-
-process.isRemoteModuleEnabled = isRemoteModuleEnabled;
+const { preloadScripts, process: processProps } = ipcRendererUtils.invokeSync(IPC_MESSAGES.BROWSER_SANDBOX_LOAD);
 
 const electron = require('electron');
 
@@ -52,6 +49,10 @@ const loadableModules = new Map<string, Function>([
 // invoking the 'onMessage' callback.
 v8Util.setHiddenValue(global, 'ipcNative', {
   onMessage (internal: boolean, channel: string, ports: MessagePort[], args: any[], senderId: number) {
+    if (internal && senderId !== 0) {
+      console.error(`Message ${channel} sent by unexpected WebContents (${senderId})`);
+      return;
+    }
     const sender = internal ? ipcRendererInternal : electron.ipcRenderer;
     sender.emit(channel, { sender, senderId, ports }, ...args);
   }
@@ -73,7 +74,7 @@ v8Util.setHiddenValue(global, 'lifecycle', {
   }
 });
 
-const { webFrameInit } = require('@electron/internal/renderer/web-frame-init');
+const { webFrameInit } = require('@electron/internal/renderer/web-frame-init') as typeof webFrameInitModule;
 webFrameInit();
 
 // Pass different process object to the preload script.
@@ -84,6 +85,10 @@ Object.assign(preloadProcess, processProps);
 
 Object.assign(process, binding.process);
 Object.assign(process, processProps);
+
+process.getProcessMemoryInfo = preloadProcess.getProcessMemoryInfo = () => {
+  return ipcRendererInternal.invoke<Electron.ProcessMemoryInfo>(IPC_MESSAGES.BROWSER_GET_PROCESS_MEMORY_INFO);
+};
 
 Object.defineProperty(preloadProcess, 'noDeprecation', {
   get () {
@@ -114,7 +119,7 @@ function preloadRequire (module: string) {
 
 // Process command line arguments.
 const { hasSwitch } = process._linkedBinding('electron_common_command_line');
-const { getWebPreference } = process._linkedBinding('electron_renderer_web_frame');
+const { mainFrame } = process._linkedBinding('electron_renderer_web_frame');
 
 // Similar to nodes --expose-internals flag, this exposes _linkedBinding so
 // that tests can call it to get access to some test only bindings
@@ -122,10 +127,12 @@ if (hasSwitch('unsafely-expose-electron-internals-for-testing')) {
   preloadProcess._linkedBinding = process._linkedBinding;
 }
 
-const contextIsolation = getWebPreference(window, 'contextIsolation');
-const isHiddenPage = getWebPreference(window, 'hiddenPage');
-const rendererProcessReuseEnabled = getWebPreference(window, 'disableElectronSiteInstanceOverrides');
+const contextIsolation = mainFrame.getWebPreference('contextIsolation');
+const webviewTag = mainFrame.getWebPreference('webviewTag');
+const isHiddenPage = mainFrame.getWebPreference('hiddenPage');
 const usesNativeWindowOpen = true;
+const guestInstanceId = mainFrame.getWebPreference('guestInstanceId');
+const openerId = mainFrame.getWebPreference('openerId');
 
 switch (window.location.protocol) {
   case 'devtools:': {
@@ -136,20 +143,20 @@ switch (window.location.protocol) {
   case 'chrome-extension:': {
     break;
   }
-  case 'chrome': {
+  case 'chrome:': {
     break;
   }
   default: {
     // Override default web functions.
-    const { windowSetup } = require('@electron/internal/renderer/window-setup');
-    windowSetup(guestInstanceId, openerId, isHiddenPage, usesNativeWindowOpen, rendererProcessReuseEnabled);
+    const { windowSetup } = require('@electron/internal/renderer/window-setup') as typeof windowSetupModule;
+    windowSetup(guestInstanceId, openerId, isHiddenPage, usesNativeWindowOpen);
   }
 }
 
 // Load webview tag implementation.
 if (process.isMainFrame) {
-  const { webViewInit } = require('@electron/internal/renderer/web-view/web-view-init');
-  webViewInit(contextIsolation, isWebViewTagEnabled, guestInstanceId);
+  const { webViewInit } = require('@electron/internal/renderer/web-view/web-view-init') as typeof webViewInitModule;
+  webViewInit(contextIsolation, webviewTag, guestInstanceId);
 }
 
 // Wrap the script into a function executed in global scope. It won't have
@@ -188,6 +195,6 @@ for (const { preloadPath, preloadSrc, preloadError } of preloadScripts) {
 
 // Warn about security issues
 if (process.isMainFrame) {
-  const { securityWarnings } = require('@electron/internal/renderer/security-warnings');
+  const { securityWarnings } = require('@electron/internal/renderer/security-warnings') as typeof securityWarningsModule;
   securityWarnings();
 }

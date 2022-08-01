@@ -13,7 +13,6 @@ declare namespace Electron {
   }
 
   interface App {
-    _setDefaultAppPaths(packagePath: string | null): void;
     setVersion(version: string): void;
     setDesktopName(name: string): void;
     setAppPath(path: string | null): void;
@@ -31,13 +30,18 @@ declare namespace Electron {
     _setTouchBarItems: (items: TouchBarItemType[]) => void;
     _setEscapeTouchBarItem: (item: TouchBarItemType | {}) => void;
     _refreshTouchBarItem: (itemID: string) => void;
+    _getWindowButtonVisibility: () => boolean;
     frameName: string;
     on(event: '-touch-bar-interaction', listener: (event: Event, itemID: string, details: any) => void): this;
     removeListener(event: '-touch-bar-interaction', listener: (event: Event, itemID: string, details: any) => void): this;
   }
 
+  interface BrowserWindowConstructorOptions {
+    webContents?: WebContents;
+  }
+
   interface ContextBridge {
-    internalContextBridge: {
+    internalContextBridge?: {
       contextIsolationEnabled: boolean;
       overrideGlobalValueFromIsolatedWorld(keys: string[], value: any): void;
       overrideGlobalValueWithDynamicPropsFromIsolatedWorld(keys: string[], value: any): void;
@@ -51,28 +55,19 @@ declare namespace Electron {
   }
 
   interface WebContents {
-    _getURL(): string;
     _loadURL(url: string, options: ElectronInternal.LoadURLOptions): void;
-    _stop(): void;
-    _goBack(): void;
-    _goForward(): void;
-    _goToOffset(offset: number): void;
     getOwnerBrowserWindow(): Electron.BrowserWindow;
-    getWebPreferences(): Electron.WebPreferences;
     getLastWebPreferences(): Electron.WebPreferences;
+    _getProcessMemoryInfo(): Electron.ProcessMemoryInfo;
     _getPreloadPaths(): string[];
     equal(other: WebContents): boolean;
-    _initiallyShown: boolean;
     browserWindowOptions: BrowserWindowConstructorOptions;
-    _windowOpenHandler: ((opts: {url: string, frameName: string, features: string}) => any) | null;
-    _callWindowOpenHandler(event: any, url: string, frameName: string, rawFeatures: string): Electron.BrowserWindowConstructorOptions | null;
+    _windowOpenHandler: ((details: Electron.HandlerDetails) => any) | null;
+    _callWindowOpenHandler(event: any, details: Electron.HandlerDetails): Electron.BrowserWindowConstructorOptions | null;
     _setNextChildWebPreferences(prefs: Partial<Electron.BrowserWindowConstructorOptions['webPreferences']> & Pick<Electron.BrowserWindowConstructorOptions, 'backgroundColor'>): void;
-    _send(internal: boolean, sendToAll: boolean, channel: string, args: any): boolean;
-    _sendToFrame(internal: boolean, sendToAll: boolean, frameId: number, channel: string, args: any): boolean;
-    _sendToFrameInternal(frameId: number, channel: string, ...args: any[]): boolean;
-    _postMessage(channel: string, message: any, transfer?: any[]): void;
+    _send(internal: boolean, channel: string, args: any): boolean;
+    _sendToFrameInternal(frameId: number | [number, number], channel: string, ...args: any[]): boolean;
     _sendInternal(channel: string, ...args: any[]): void;
-    _sendInternalToAll(channel: string, ...args: any[]): void;
     _printToPDF(options: any): Promise<Buffer>;
     _print(options: any, callback?: (success: boolean, failureReason: string) => void): void;
     _getPrinters(): Electron.PrinterInfo[];
@@ -85,18 +80,19 @@ declare namespace Electron {
     attachToIframe(embedderWebContents: Electron.WebContents, embedderFrameId: number): void;
     detachFromOuterFrame(): void;
     setEmbedder(embedder: Electron.WebContents): void;
-    attachParams?: Record<string, any>;
+    attachParams?: { instanceId: number; src: string, opts: LoadURLOptions };
     viewInstanceId: number;
   }
 
-  interface WebFrame {
-    getWebFrameId(window: Window): number;
-    allowGuestViewElementDefinition(window: Window, context: any): void;
+  interface WebFrameMain {
+    _send(internal: boolean, channel: string, args: any): void;
+    _sendInternal(channel: string, ...args: any[]): void;
+    _postMessage(channel: string, message: any, transfer?: any[]): void;
   }
 
   interface WebPreferences {
     guestInstanceId?: number;
-    openerId?: number;
+    openerId?: number | null;
     disablePopups?: boolean;
     preloadURL?: string;
     embedder?: Electron.WebContents;
@@ -116,9 +112,7 @@ declare namespace Electron {
     _executeCommand(event: any, id: number): void;
     _menuWillShow(): void;
     commandsMap: Record<string, MenuItem>;
-    groupsMap: Record<string, {
-      checked: boolean;
-    }[]>;
+    groupsMap: Record<string, MenuItem[]>;
     getItemCount(): number;
     popupAt(window: BaseWindow, x: number, y: number, positioning: number, callback: () => void): void;
     closePopupAt(id: number): void;
@@ -132,7 +126,7 @@ declare namespace Electron {
     insertSeparator(index: number): void;
     insertSubMenu(index: number, commandId: number, label: string, submenu?: Menu): void;
     delegate?: any;
-    getAcceleratorTextAt(index: number): string;
+    _getAcceleratorTextAt(index: number): string;
   }
 
   interface MenuItem {
@@ -143,9 +137,14 @@ declare namespace Electron {
     acceleratorWorksWhenHidden?: boolean;
   }
 
+  interface IpcMainEvent {
+    sendReply(value: any): void;
+  }
+
   interface IpcMainInvokeEvent {
+    sendReply(value: any): void;
     _reply(value: any): void;
-    _throw(error: Error): void;
+    _throw(error: Error | string): void;
   }
 
   const deprecate: ElectronInternal.DeprecationUtil;
@@ -230,16 +229,11 @@ declare namespace ElectronInternal {
     appIcon: Electron.NativeImage | null;
   }
 
-  interface IpcRendererInternal extends Electron.IpcRenderer {
+  interface IpcRendererInternal extends NodeJS.EventEmitter, Pick<Electron.IpcRenderer, 'send' | 'sendSync' | 'invoke'> {
     invoke<T>(channel: string, ...args: any[]): Promise<T>;
-    sendToAll(webContentsId: number, channel: string, ...args: any[]): void;
-    onMessageFromMain(channel: string, listener: (event: Electron.IpcRendererEvent, ...args: any[]) => void): this;
-    onceMessageFromMain(channel: string, listener: (event: Electron.IpcRendererEvent, ...args: any[]) => void): this;
   }
 
-  // Internal IPC has _replyInternal and NO reply method
   interface IpcMainInternalEvent extends Omit<Electron.IpcMainEvent, 'reply'> {
-    _replyInternal(...args: any[]): void;
   }
 
   interface IpcMainInternal extends NodeJS.EventEmitter {
@@ -248,8 +242,24 @@ declare namespace ElectronInternal {
     once(channel: string, listener: (event: IpcMainInternalEvent, ...args: any[]) => void): this;
   }
 
+  interface Event extends Electron.Event {
+    sender: WebContents;
+  }
+
   interface LoadURLOptions extends Electron.LoadURLOptions {
     reloadIgnoringCache?: boolean;
+  }
+
+  interface WebContentsPrintOptions extends Electron.WebContentsPrintOptions {
+    mediaSize?: MediaSize;
+  }
+
+  type MediaSize = {
+    name: string,
+    custom_display_name: string,
+    height_microns: number,
+    width_microns: number,
+    is_default?: 'true',
   }
 
   type ModuleLoader = () => any;
@@ -258,16 +268,6 @@ declare namespace ElectronInternal {
     name: string;
     private?: boolean;
     loader: ModuleLoader;
-  }
-
-  interface WebFrameResizeEvent extends WebViewEvent {
-    newWidth: number;
-    newHeight: number;
-  }
-
-  interface WebViewEvent extends Event {
-    url: string;
-    isMainFrame: boolean;
   }
 
   class WebViewElement extends HTMLElement {
@@ -291,7 +291,7 @@ declare namespace ElectronInternal {
 
 declare namespace Chrome {
   namespace Tabs {
-    // https://developer.chrome.com/extensions/tabs#method-executeScript
+    // https://developer.chrome.com/docs/extensions/tabs#method-executeScript
     interface ExecuteScriptDetails {
       code?: string;
       file?: string;
@@ -304,7 +304,7 @@ declare namespace Chrome {
 
     type ExecuteScriptCallback = (result: Array<any>) => void;
 
-    // https://developer.chrome.com/extensions/tabs#method-sendMessage
+    // https://developer.chrome.com/docs/extensions/tabs#method-sendMessage
     interface SendMessageDetails {
       frameId?: number;
     }

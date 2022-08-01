@@ -4,10 +4,9 @@
 
 #include "shell/browser/electron_web_ui_controller_factory.h"
 
-#include <string>
-
 #include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui_controller.h"
 #include "electron/buildflags/buildflags.h"
 #include "shell/browser/ui/devtools_ui.h"
 #include "shell/browser/ui/webui/accessibility_ui.h"
@@ -38,12 +37,6 @@ bool ElectronWebUIControllerFactory::UseWebUIForURL(
     content::BrowserContext* browser_context,
     const GURL& url) {
   return GetWebUIType(browser_context, url) != content::WebUI::kNoWebUI;
-}
-
-bool ElectronWebUIControllerFactory::UseWebUIBindingsForURL(
-    content::BrowserContext* browser_context,
-    const GURL& url) {
-  return UseWebUIForURL(browser_context, url);
 }
 
 std::unique_ptr<content::WebUIController>

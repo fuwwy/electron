@@ -6,7 +6,6 @@
 #define SHELL_COMMON_APPLICATION_INFO_H_
 
 #if defined(OS_WIN)
-#include "base/strings/string16.h"
 #include "shell/browser/win/scoped_hstring.h"
 #endif
 
@@ -14,11 +13,10 @@
 
 namespace electron {
 
-void OverrideApplicationName(const std::string& name);
-std::string GetOverriddenApplicationName();
+std::string& OverriddenApplicationName();
+std::string& OverriddenApplicationVersion();
 
-void OverrideApplicationVersion(const std::string& version);
-std::string GetOverriddenApplicationVersion();
+std::string GetPossiblyOverriddenApplicationName();
 
 std::string GetApplicationName();
 std::string GetApplicationVersion();
@@ -28,7 +26,7 @@ std::string GetApplicationUserAgent();
 #if defined(OS_WIN)
 PCWSTR GetRawAppUserModelID();
 bool GetAppUserModelID(ScopedHString* app_id);
-void SetAppUserModelID(const base::string16& name);
+void SetAppUserModelID(const std::wstring& name);
 bool IsRunningInDesktopBridge();
 #endif
 

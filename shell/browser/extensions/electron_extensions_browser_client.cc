@@ -57,14 +57,15 @@ using extensions::ExtensionsBrowserClient;
 namespace electron {
 
 ElectronExtensionsBrowserClient::ElectronExtensionsBrowserClient()
-    : api_client_(new extensions::ElectronExtensionsAPIClient),
-      process_manager_delegate_(new extensions::ElectronProcessManagerDelegate),
-      extension_cache_(new extensions::NullExtensionCache()) {
+    : api_client_(std::make_unique<extensions::ElectronExtensionsAPIClient>()),
+      process_manager_delegate_(
+          std::make_unique<extensions::ElectronProcessManagerDelegate>()),
+      extension_cache_(std::make_unique<extensions::NullExtensionCache>()) {
   // Electron does not have a concept of channel, so leave UNKNOWN to
   // enable all channel-dependent extension APIs.
   extensions::SetCurrentChannel(version_info::Channel::UNKNOWN);
-  resource_manager_.reset(
-      new extensions::ElectronComponentExtensionResourceManager());
+  resource_manager_ =
+      std::make_unique<extensions::ElectronComponentExtensionResourceManager>();
 
   AddAPIProvider(
       std::make_unique<extensions::CoreExtensionsBrowserAPIProvider>());
@@ -72,7 +73,7 @@ ElectronExtensionsBrowserClient::ElectronExtensionsBrowserClient()
       std::make_unique<extensions::ElectronExtensionsBrowserAPIProvider>());
 }
 
-ElectronExtensionsBrowserClient::~ElectronExtensionsBrowserClient() {}
+ElectronExtensionsBrowserClient::~ElectronExtensionsBrowserClient() = default;
 
 bool ElectronExtensionsBrowserClient::IsShuttingDown() {
   return electron::Browser::Get()->is_shutting_down();
@@ -170,26 +171,26 @@ void ElectronExtensionsBrowserClient::LoadResourceFromResourceBundle(
     mojo::PendingReceiver<network::mojom::URLLoader> loader,
     const base::FilePath& resource_relative_path,
     int resource_id,
-    const std::string& content_security_policy,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
-    bool send_cors_header) {
+    scoped_refptr<net::HttpResponseHeaders> headers,
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
   extensions::chrome_url_request_util::LoadResourceFromResourceBundle(
       request, std::move(loader), resource_relative_path, resource_id,
-      content_security_policy, std::move(client), send_cors_header);
+      std::move(headers), std::move(client));
 }
 
 namespace {
-bool AllowCrossRendererResourceLoad(const GURL& url,
-                                    blink::mojom::ResourceType resource_type,
-                                    ui::PageTransition page_transition,
-                                    int child_id,
-                                    bool is_incognito,
-                                    const extensions::Extension* extension,
-                                    const extensions::ExtensionSet& extensions,
-                                    const extensions::ProcessMap& process_map,
-                                    bool* allowed) {
+bool AllowCrossRendererResourceLoad(
+    const network::ResourceRequest& request,
+    network::mojom::RequestDestination destination,
+    ui::PageTransition page_transition,
+    int child_id,
+    bool is_incognito,
+    const extensions::Extension* extension,
+    const extensions::ExtensionSet& extensions,
+    const extensions::ProcessMap& process_map,
+    bool* allowed) {
   if (extensions::url_request_util::AllowCrossRendererResourceLoad(
-          url, resource_type, page_transition, child_id, is_incognito,
+          request, destination, page_transition, child_id, is_incognito,
           extension, extensions, process_map, allowed)) {
     return true;
   }
@@ -209,8 +210,8 @@ bool AllowCrossRendererResourceLoad(const GURL& url,
 }  // namespace
 
 bool ElectronExtensionsBrowserClient::AllowCrossRendererResourceLoad(
-    const GURL& url,
-    blink::mojom::ResourceType resource_type,
+    const network::ResourceRequest& request,
+    network::mojom::RequestDestination destination,
     ui::PageTransition page_transition,
     int child_id,
     bool is_incognito,
@@ -219,7 +220,7 @@ bool ElectronExtensionsBrowserClient::AllowCrossRendererResourceLoad(
     const extensions::ProcessMap& process_map) {
   bool allowed = false;
   if (::electron::AllowCrossRendererResourceLoad(
-          url, resource_type, page_transition, child_id, is_incognito,
+          request, destination, page_transition, child_id, is_incognito,
           extension, extensions, process_map, &allowed)) {
     return allowed;
   }
@@ -245,7 +246,7 @@ ElectronExtensionsBrowserClient::GetProcessManagerDelegate() const {
 std::unique_ptr<extensions::ExtensionHostDelegate>
 ElectronExtensionsBrowserClient::
     CreateExtensionHostDelegate() {  // TODO(samuelmaddock):
-  return base::WrapUnique(new extensions::ElectronExtensionHostDelegate);
+  return std::make_unique<extensions::ElectronExtensionHostDelegate>();
 }
 
 bool ElectronExtensionsBrowserClient::DidVersionUpdate(
@@ -309,8 +310,8 @@ void ElectronExtensionsBrowserClient::BroadcastEventToRenderers(
     return;
   }
 
-  std::unique_ptr<extensions::Event> event(
-      new extensions::Event(histogram_value, event_name, std::move(args)));
+  auto event = std::make_unique<extensions::Event>(histogram_value, event_name,
+                                                   std::move(*args).TakeList());
   auto& context_map = ElectronBrowserContext::browser_context_map();
   for (auto const& entry : context_map) {
     if (entry.second) {
@@ -348,7 +349,7 @@ ElectronExtensionsBrowserClient::GetExtensionWebContentsObserver(
 
 extensions::KioskDelegate* ElectronExtensionsBrowserClient::GetKioskDelegate() {
   if (!kiosk_delegate_)
-    kiosk_delegate_.reset(new ElectronKioskDelegate());
+    kiosk_delegate_ = std::make_unique<ElectronKioskDelegate>();
   return kiosk_delegate_.get();
 }
 

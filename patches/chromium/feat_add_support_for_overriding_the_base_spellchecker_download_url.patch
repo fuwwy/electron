@@ -9,10 +9,10 @@ production use cases.  This is unlikely to be upstreamed as the change
 is entirely in //chrome.
 
 diff --git a/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc b/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
-index ca81ec53b3316bfc01c083818d5d2b4c0b59e967..c303a5bdd8cc3d19c61b03206c5e17ed98fefabf 100644
+index 182721f9238683321ef5645d5506d2e88816f45f..31958788b8b2f110ecedcd9f0ba3b8ec2e9342d9 100644
 --- a/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
 +++ b/chrome/browser/spellchecker/spellcheck_hunspell_dictionary.cc
-@@ -50,6 +50,9 @@ namespace {
+@@ -51,6 +51,9 @@ namespace {
  base::LazyInstance<GURL>::Leaky g_download_url_for_testing =
      LAZY_INSTANCE_INITIALIZER;
  
@@ -22,7 +22,7 @@ index ca81ec53b3316bfc01c083818d5d2b4c0b59e967..c303a5bdd8cc3d19c61b03206c5e17ed
  // Close the file.
  void CloseDictionary(base::File file) {
    base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
-@@ -270,6 +273,10 @@ void SpellcheckHunspellDictionary::SetDownloadURLForTesting(const GURL url) {
+@@ -271,6 +274,10 @@ void SpellcheckHunspellDictionary::SetDownloadURLForTesting(const GURL url) {
    g_download_url_for_testing.Get() = url;
  }
  
@@ -33,7 +33,7 @@ index ca81ec53b3316bfc01c083818d5d2b4c0b59e967..c303a5bdd8cc3d19c61b03206c5e17ed
  GURL SpellcheckHunspellDictionary::GetDictionaryURL() {
    if (g_download_url_for_testing.Get() != GURL())
      return g_download_url_for_testing.Get();
-@@ -277,6 +284,9 @@ GURL SpellcheckHunspellDictionary::GetDictionaryURL() {
+@@ -278,6 +285,9 @@ GURL SpellcheckHunspellDictionary::GetDictionaryURL() {
    std::string bdict_file = dictionary_file_.path.BaseName().MaybeAsASCII();
    DCHECK(!bdict_file.empty());
  

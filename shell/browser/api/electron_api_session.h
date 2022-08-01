@@ -104,6 +104,8 @@ class Session : public gin::Wrappable<Session>,
                                    gin::Arguments* args);
   void SetPermissionCheckHandler(v8::Local<v8::Value> val,
                                  gin::Arguments* args);
+  void SetDevicePermissionHandler(v8::Local<v8::Value> val,
+                                  gin::Arguments* args);
   v8::Local<v8::Promise> ClearHostResolverCache(gin::Arguments* args);
   v8::Local<v8::Promise> ClearAuthCache();
   void AllowNTLMCredentialsForDomains(const std::string& domains);
@@ -124,6 +126,7 @@ class Session : public gin::Wrappable<Session>,
   v8::Local<v8::Value> NetLog(v8::Isolate* isolate);
   void Preconnect(const gin_helper::Dictionary& options, gin::Arguments* args);
   v8::Local<v8::Promise> CloseAllConnections();
+  v8::Local<v8::Value> GetPath(v8::Isolate* isolate);
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
   base::Value GetSpellCheckerLanguages();
   void SetSpellCheckerLanguages(gin_helper::ErrorThrower thrower,
@@ -136,7 +139,8 @@ class Session : public gin::Wrappable<Session>,
 #endif
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
-  v8::Local<v8::Promise> LoadExtension(const base::FilePath& extension_path);
+  v8::Local<v8::Promise> LoadExtension(const base::FilePath& extension_path,
+                                       gin::Arguments* args);
   void RemoveExtension(const std::string& extension_id);
   v8::Local<v8::Value> GetExtension(const std::string& extension_id);
   v8::Local<v8::Value> GetAllExtensions();
@@ -176,6 +180,8 @@ class Session : public gin::Wrappable<Session>,
   v8::Global<v8::Value> net_log_;
   v8::Global<v8::Value> service_worker_context_;
   v8::Global<v8::Value> web_request_;
+
+  v8::Isolate* isolate_;
 
   // The client id to enable the network throttler.
   base::UnguessableToken network_emulation_token_;

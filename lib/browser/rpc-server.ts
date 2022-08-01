@@ -1,12 +1,13 @@
 import { app } from 'electron/main';
 import type { WebContents } from 'electron/main';
-import { clipboard, crashReporter, nativeImage } from 'electron/common';
+import { clipboard } from 'electron/common';
 import * as fs from 'fs';
 import { ipcMainInternal } from '@electron/internal/browser/ipc-main-internal';
 import * as ipcMainUtils from '@electron/internal/browser/ipc-main-internal-utils';
-import * as guestViewManager from '@electron/internal/browser/guest-view-manager';
 import * as typeUtils from '@electron/internal/common/type-utils';
 import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
+
+import type * as desktopCapturerModule from '@electron/internal/browser/desktop-capturer';
 
 const eventBinding = process._linkedBinding('electron_browser_event');
 
@@ -38,6 +39,10 @@ ipcMainInternal.handle(IPC_MESSAGES.BROWSER_GET_LAST_WEB_PREFERENCES, function (
   return event.sender.getLastWebPreferences();
 });
 
+ipcMainInternal.handle(IPC_MESSAGES.BROWSER_GET_PROCESS_MEMORY_INFO, function (event) {
+  return event.sender._getProcessMemoryInfo();
+});
+
 // Methods not listed in this set are called directly in the renderer process.
 const allowedClipboardMethods = (() => {
   switch (process.platform) {
@@ -59,7 +64,7 @@ ipcMainUtils.handleSync(IPC_MESSAGES.BROWSER_CLIPBOARD_SYNC, function (event, me
 });
 
 if (BUILDFLAG(ENABLE_DESKTOP_CAPTURER)) {
-  const desktopCapturer = require('@electron/internal/browser/desktop-capturer');
+  const desktopCapturer = require('@electron/internal/browser/desktop-capturer') as typeof desktopCapturerModule;
 
   ipcMainInternal.handle(IPC_MESSAGES.DESKTOP_CAPTURER_GET_SOURCES, async function (event, options: Electron.SourcesOptions, stack: string) {
     logStack(event.sender, 'desktopCapturer.getSources()', stack);
@@ -70,19 +75,15 @@ if (BUILDFLAG(ENABLE_DESKTOP_CAPTURER)) {
       return [];
     }
 
-    return typeUtils.serialize(await desktopCapturer.getSourcesImpl(event, options));
+    return typeUtils.serialize(await desktopCapturer.getSourcesImpl(event.sender, options));
   });
 }
-
-const isRemoteModuleEnabled = BUILDFLAG(ENABLE_REMOTE_MODULE)
-  ? require('@electron/internal/browser/remote/server').isRemoteModuleEnabled
-  : () => false;
 
 const getPreloadScript = async function (preloadPath: string) {
   let preloadSrc = null;
   let preloadError = null;
   try {
-    preloadSrc = (await fs.promises.readFile(preloadPath)).toString();
+    preloadSrc = await fs.promises.readFile(preloadPath, 'utf8');
   } catch (error) {
     preloadError = error;
   }
@@ -91,14 +92,9 @@ const getPreloadScript = async function (preloadPath: string) {
 
 ipcMainUtils.handleSync(IPC_MESSAGES.BROWSER_SANDBOX_LOAD, async function (event) {
   const preloadPaths = event.sender._getPreloadPaths();
-  const webPreferences = event.sender.getLastWebPreferences() || {};
 
   return {
     preloadScripts: await Promise.all(preloadPaths.map(path => getPreloadScript(path))),
-    isRemoteModuleEnabled: isRemoteModuleEnabled(event.sender),
-    isWebViewTagEnabled: guestViewManager.isWebViewTagEnabled(event.sender),
-    guestInstanceId: webPreferences.guestInstanceId,
-    openerId: webPreferences.openerId,
     process: {
       arch: process.arch,
       platform: process.platform,
@@ -112,28 +108,4 @@ ipcMainUtils.handleSync(IPC_MESSAGES.BROWSER_SANDBOX_LOAD, async function (event
 
 ipcMainInternal.on(IPC_MESSAGES.BROWSER_PRELOAD_ERROR, function (event, preloadPath: string, error: Error) {
   event.sender.emit('preload-error', event, preloadPath, error);
-});
-
-ipcMainUtils.handleSync(IPC_MESSAGES.CRASH_REPORTER_GET_LAST_CRASH_REPORT, () => {
-  return crashReporter.getLastCrashReport();
-});
-
-ipcMainUtils.handleSync(IPC_MESSAGES.CRASH_REPORTER_GET_UPLOADED_REPORTS, () => {
-  return crashReporter.getUploadedReports();
-});
-
-ipcMainUtils.handleSync(IPC_MESSAGES.CRASH_REPORTER_GET_UPLOAD_TO_SERVER, () => {
-  return crashReporter.getUploadToServer();
-});
-
-ipcMainUtils.handleSync(IPC_MESSAGES.CRASH_REPORTER_SET_UPLOAD_TO_SERVER, (event, uploadToServer: boolean) => {
-  return crashReporter.setUploadToServer(uploadToServer);
-});
-
-ipcMainUtils.handleSync(IPC_MESSAGES.CRASH_REPORTER_GET_CRASHES_DIRECTORY, () => {
-  return crashReporter.getCrashesDirectory();
-});
-
-ipcMainInternal.handle(IPC_MESSAGES.NATIVE_IMAGE_CREATE_THUMBNAIL_FROM_PATH, async (_, path: string, size: Electron.Size) => {
-  return typeUtils.serialize(await nativeImage.createThumbnailFromPath(path, size));
 });

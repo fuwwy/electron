@@ -10,12 +10,11 @@
 #include "base/files/file_path.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
 #include "uv.h"  // NOLINT(build/include_directory)
 #include "v8/include/v8.h"
 
 namespace base {
-class MessageLoop;
+class SingleThreadTaskRunner;
 }
 
 namespace node {
@@ -159,7 +158,11 @@ class NodeBindings {
   // Isolate data used in creating the environment
   node::IsolateData* isolate_data_ = nullptr;
 
-  base::WeakPtrFactory<NodeBindings> weak_factory_;
+#if !defined(OS_WIN)
+  int handle_ = -1;
+#endif
+
+  base::WeakPtrFactory<NodeBindings> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(NodeBindings);
 };

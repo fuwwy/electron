@@ -66,6 +66,7 @@ export const asyncMethods = new Set([
   'insertText',
   'removeInsertedCSS',
   'send',
+  'sendToFrame',
   'sendInputEvent',
   'setLayoutZoomLevelLimits',
   'setVisualZoomLevelLimits',

@@ -4,28 +4,33 @@
 
 #include "shell/browser/serial/serial_chooser_context.h"
 
+#include <string>
 #include <utility>
 
 #include "base/base64.h"
+#include "base/containers/contains.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "content/public/browser/device_service.h"
+#include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "shell/browser/web_contents_permission_helper.h"
 
 namespace electron {
 
 constexpr char kPortNameKey[] = "name";
 constexpr char kTokenKey[] = "token";
+
 #if defined(OS_WIN)
-constexpr char kDeviceInstanceIdKey[] = "device_instance_id";
+const char kDeviceInstanceIdKey[] = "device_instance_id";
 #else
-constexpr char kVendorIdKey[] = "vendor_id";
-constexpr char kProductIdKey[] = "product_id";
-constexpr char kSerialNumberKey[] = "serial_number";
+const char kVendorIdKey[] = "vendor_id";
+const char kProductIdKey[] = "product_id";
+const char kSerialNumberKey[] = "serial_number";
 #if defined(OS_MAC)
-constexpr char kUsbDriverKey[] = "usb_driver";
+const char kUsbDriverKey[] = "usb_driver";
 #endif  // defined(OS_MAC)
-#endif  // defined(OS_WIN)
+#endif  // defined(OS_WIN
 
 std::string EncodeToken(const base::UnguessableToken& token) {
   const uint64_t data[2] = {token.GetHighForSerialization(),
@@ -81,30 +86,33 @@ base::Value PortInfoToValue(const device::mojom::SerialPortInfo& port) {
 }
 
 SerialChooserContext::SerialChooserContext() = default;
+
 SerialChooserContext::~SerialChooserContext() = default;
 
 void SerialChooserContext::GrantPortPermission(
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin,
-    const device::mojom::SerialPortInfo& port) {
+    const url::Origin& origin,
+    const device::mojom::SerialPortInfo& port,
+    content::RenderFrameHost* render_frame_host) {
   base::Value value = PortInfoToValue(port);
-  port_info_.insert({port.token, value.Clone()});
-
-  ephemeral_ports_[{requesting_origin, embedding_origin}].insert(port.token);
+  auto* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+  auto* permission_helper =
+      WebContentsPermissionHelper::FromWebContents(web_contents);
+  permission_helper->GrantSerialPortPermission(origin, std::move(value),
+                                               render_frame_host);
 }
 
 bool SerialChooserContext::HasPortPermission(
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin,
-    const device::mojom::SerialPortInfo& port) {
-  auto it = ephemeral_ports_.find({requesting_origin, embedding_origin});
-  if (it != ephemeral_ports_.end()) {
-    const std::set<base::UnguessableToken> ports = it->second;
-    if (base::Contains(ports, port.token))
-      return true;
-  }
-
-  return false;
+    const url::Origin& origin,
+    const device::mojom::SerialPortInfo& port,
+    content::RenderFrameHost* render_frame_host) {
+  auto* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+  auto* permission_helper =
+      WebContentsPermissionHelper::FromWebContents(web_contents);
+  base::Value value = PortInfoToValue(port);
+  return permission_helper->CheckSerialPortPermission(origin, std::move(value),
+                                                      render_frame_host);
 }
 
 // static
@@ -167,16 +175,6 @@ void SerialChooserContext::OnPortRemoved(
     device::mojom::SerialPortInfoPtr port) {
   for (auto& observer : port_observer_list_)
     observer.OnPortRemoved(*port);
-
-  std::vector<std::pair<url::Origin, url::Origin>> revoked_url_pairs;
-  for (auto& map_entry : ephemeral_ports_) {
-    std::set<base::UnguessableToken>& ports = map_entry.second;
-    if (ports.erase(port->token) > 0) {
-      revoked_url_pairs.push_back(map_entry.first);
-    }
-  }
-
-  port_info_.erase(port->token);
 }
 
 void SerialChooserContext::EnsurePortManagerConnection() {
@@ -202,10 +200,6 @@ void SerialChooserContext::SetUpPortManagerConnection(
 void SerialChooserContext::OnPortManagerConnectionError() {
   port_manager_.reset();
   client_receiver_.reset();
-
-  port_info_.clear();
-
-  ephemeral_ports_.clear();
 }
 
 }  // namespace electron

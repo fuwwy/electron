@@ -64,7 +64,11 @@ bool NativeTheme::ShouldUseDarkColors() {
 }
 
 bool NativeTheme::ShouldUseHighContrastColors() {
-  return ui_theme_->UsesHighContrastColors();
+  return ui_theme_->UserHasContrastPreference();
+}
+
+bool NativeTheme::InForcedColorsMode() {
+  return ui_theme_->InForcedColorsMode();
 }
 
 #if defined(OS_MAC)
@@ -106,7 +110,8 @@ gin::ObjectTemplateBuilder NativeTheme::GetObjectTemplateBuilder(
       .SetProperty("shouldUseHighContrastColors",
                    &NativeTheme::ShouldUseHighContrastColors)
       .SetProperty("shouldUseInvertedColorScheme",
-                   &NativeTheme::ShouldUseInvertedColorScheme);
+                   &NativeTheme::ShouldUseInvertedColorScheme)
+      .SetProperty("inForcedColorsMode", &NativeTheme::InForcedColorsMode);
 }
 
 const char* NativeTheme::GetTypeName() {

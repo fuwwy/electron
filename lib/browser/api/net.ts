@@ -119,10 +119,13 @@ class IncomingMessage extends Readable {
       this._shouldPush = this.push(chunk);
     }
     if (this._shouldPush && this._resume) {
-      this._resume();
       // Reset the callback, so that a new one is used for each
-      // batch of throttled data
+      // batch of throttled data. Do this before calling resume to avoid a
+      // potential race-condition
+      const resume = this._resume;
       this._resume = null;
+
+      resume();
     }
   }
 
@@ -185,6 +188,11 @@ class ChunkedBodyStream extends Writable {
     this._downstream = pipe;
     if (this._pendingChunk) {
       const doneWriting = (maybeError: Error | void) => {
+        // If the underlying request has been aborted, we honeslty don't care about the error
+        // all work should cease as soon as we abort anyway, this error is probably a
+        // "mojo pipe disconnected" error (code=9)
+        if (this._clientRequest._aborted) return;
+
         const cb = this._pendingCallback!;
         delete this._pendingCallback;
         delete this._pendingChunk;
@@ -197,7 +205,7 @@ class ChunkedBodyStream extends Writable {
 
 type RedirectPolicy = 'manual' | 'follow' | 'error';
 
-function parseOptions (optionsIn: ClientRequestConstructorOptions | string): NodeJS.CreateURLLoaderOptions & { redirectPolicy: RedirectPolicy, extraHeaders: Record<string, string> } {
+function parseOptions (optionsIn: ClientRequestConstructorOptions | string): NodeJS.CreateURLLoaderOptions & { redirectPolicy: RedirectPolicy, headers: Record<string, { name: string, value: string | string[] }> } {
   const options: any = typeof optionsIn === 'string' ? url.parse(optionsIn) : { ...optionsIn };
 
   let urlStr: string = options.url;
@@ -249,22 +257,26 @@ function parseOptions (optionsIn: ClientRequestConstructorOptions | string): Nod
     throw new TypeError('headers must be an object');
   }
 
-  const urlLoaderOptions: NodeJS.CreateURLLoaderOptions & { redirectPolicy: RedirectPolicy, extraHeaders: Record<string, string | string[]> } = {
+  const urlLoaderOptions: NodeJS.CreateURLLoaderOptions & { redirectPolicy: RedirectPolicy, headers: Record<string, { name: string, value: string | string[] }> } = {
     method: (options.method || 'GET').toUpperCase(),
     url: urlStr,
     redirectPolicy,
-    extraHeaders: options.headers || {},
+    headers: {},
     body: null as any,
     useSessionCookies: options.useSessionCookies,
-    credentials: options.credentials
+    credentials: options.credentials,
+    origin: options.origin
   };
-  for (const [name, value] of Object.entries(urlLoaderOptions.extraHeaders!)) {
+  const headers: Record<string, string | string[]> = options.headers || {};
+  for (const [name, value] of Object.entries(headers)) {
     if (!isValidHeaderName(name)) {
       throw new Error(`Invalid header name: '${name}'`);
     }
     if (!isValidHeaderValue(value.toString())) {
       throw new Error(`Invalid value for header '${name}': '${value}'`);
     }
+    const key = name.toLowerCase();
+    urlLoaderOptions.headers[key] = { name, value };
   }
   if (options.session) {
     // Weak check, but it should be enough to catch 99% of accidental misuses.
@@ -289,7 +301,7 @@ export class ClientRequest extends Writable implements Electron.ClientRequest {
   _aborted: boolean = false;
   _chunkedEncoding: boolean | undefined;
   _body: Writable | undefined;
-  _urlLoaderOptions: NodeJS.CreateURLLoaderOptions & { extraHeaders: Record<string, string> };
+  _urlLoaderOptions: NodeJS.CreateURLLoaderOptions & { headers: Record<string, { name: string, value: string | string[] }> };
   _redirectPolicy: RedirectPolicy;
   _followRedirectCb?: () => void;
   _uploadProgress?: { active: boolean, started: boolean, current: number, total: number };
@@ -350,7 +362,7 @@ export class ClientRequest extends Writable implements Electron.ClientRequest {
     }
 
     const key = name.toLowerCase();
-    this._urlLoaderOptions.extraHeaders[key] = value;
+    this._urlLoaderOptions.headers[key] = { name, value };
   }
 
   getHeader (name: string) {
@@ -359,7 +371,8 @@ export class ClientRequest extends Writable implements Electron.ClientRequest {
     }
 
     const key = name.toLowerCase();
-    return this._urlLoaderOptions.extraHeaders[key];
+    const header = this._urlLoaderOptions.headers[key];
+    return header && header.value as any;
   }
 
   removeHeader (name: string) {
@@ -372,7 +385,7 @@ export class ClientRequest extends Writable implements Electron.ClientRequest {
     }
 
     const key = name.toLowerCase();
-    delete this._urlLoaderOptions.extraHeaders[key];
+    delete this._urlLoaderOptions.headers[key];
   }
 
   _write (chunk: Buffer, encoding: BufferEncoding, callback: () => void) {
@@ -401,15 +414,20 @@ export class ClientRequest extends Writable implements Electron.ClientRequest {
 
   _startRequest () {
     this._started = true;
-    const stringifyValues = (obj: Record<string, any>) => {
+    const stringifyValues = (obj: Record<string, { name: string, value: string | string[] }>) => {
       const ret: Record<string, string> = {};
       for (const k of Object.keys(obj)) {
-        ret[k] = obj[k].toString();
+        const kv = obj[k];
+        ret[kv.name] = kv.value.toString();
       }
       return ret;
     };
-    this._urlLoaderOptions.referrer = this._urlLoaderOptions.extraHeaders.referer || '';
-    const opts = { ...this._urlLoaderOptions, extraHeaders: stringifyValues(this._urlLoaderOptions.extraHeaders) };
+    this._urlLoaderOptions.referrer = this.getHeader('referer') || '';
+    this._urlLoaderOptions.origin = this._urlLoaderOptions.origin || this.getHeader('origin') || '';
+    this._urlLoaderOptions.hasUserActivation = this.getHeader('sec-fetch-user') === '?1';
+    this._urlLoaderOptions.mode = this.getHeader('sec-fetch-mode') || '';
+    this._urlLoaderOptions.destination = this.getHeader('sec-fetch-dest') || '';
+    const opts = { ...this._urlLoaderOptions, extraHeaders: stringifyValues(this._urlLoaderOptions.headers) };
     this._urlLoader = createURLLoader(opts);
     this._urlLoader.on('response-started', (event, finalUrl, responseHead) => {
       const response = this._response = new IncomingMessage(responseHead);

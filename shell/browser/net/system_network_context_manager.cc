@@ -4,28 +4,49 @@
 
 #include "shell/browser/net/system_network_context_manager.h"
 
+#include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/command_line.h"
+#include "base/path_service.h"
+#include "base/strings/string_split.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_factory.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
+#include "components/os_crypt/os_crypt.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/common/content_features.h"
-#include "content/public/common/service_names.mojom.h"
-#include "mojo/public/cpp/bindings/associated_interface_ptr.h"
+#include "content/public/common/network_service_util.h"
+#include "electron/fuses.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "net/dns/public/util.h"
 #include "net/net_buildflags.h"
+#include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "shell/browser/api/electron_api_safe_storage.h"
+#include "shell/browser/browser.h"
 #include "shell/browser/electron_browser_client.h"
 #include "shell/common/application_info.h"
+#include "shell/common/electron_paths.h"
 #include "shell/common/options_switches.h"
 #include "url/gurl.h"
+
+#if defined(OS_MAC)
+#include "components/os_crypt/keychain_password_mac.h"
+#endif
+
+#if defined(OS_LINUX)
+#include "components/os_crypt/key_storage_config_linux.h"
+#endif
 
 namespace {
 
@@ -74,7 +95,6 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
   // mojom::URLLoaderFactory implementation:
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> request,
-      int32_t routing_id,
       int32_t request_id,
       uint32_t options,
       const network::ResourceRequest& url_request,
@@ -85,8 +105,8 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
     if (!manager_)
       return;
     manager_->GetURLLoaderFactory()->CreateLoaderAndStart(
-        std::move(request), routing_id, request_id, options, url_request,
-        std::move(client), traffic_annotation);
+        std::move(request), request_id, options, url_request, std::move(client),
+        traffic_annotation);
   }
 
   void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
@@ -158,6 +178,12 @@ SystemNetworkContextManager::CreateDefaultNetworkContextParams() {
       network::mojom::NetworkContextParams::New();
 
   ConfigureDefaultNetworkContextParams(network_context_params.get());
+
+  cert_verifier::mojom::CertVerifierCreationParamsPtr
+      cert_verifier_creation_params =
+          cert_verifier::mojom::CertVerifierCreationParams::New();
+  network_context_params->cert_verifier_params =
+      content::GetCertVerifierParams(std::move(cert_verifier_creation_params));
   return network_context_params;
 }
 
@@ -198,7 +224,8 @@ void SystemNetworkContextManager::DeleteInstance() {
 SystemNetworkContextManager::SystemNetworkContextManager(
     PrefService* pref_service)
     : proxy_config_monitor_(pref_service) {
-  shared_url_loader_factory_ = new URLLoaderFactoryForSystem(this);
+  shared_url_loader_factory_ =
+      base::MakeRefCounted<URLLoaderFactoryForSystem>(this);
 }
 
 SystemNetworkContextManager::~SystemNetworkContextManager() {
@@ -214,6 +241,71 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
   network_service->CreateNetworkContext(
       network_context_.BindNewPipeAndPassReceiver(),
       CreateNetworkContextParams());
+
+  net::SecureDnsMode default_secure_dns_mode = net::SecureDnsMode::kOff;
+  std::string default_doh_templates;
+  if (base::FeatureList::IsEnabled(features::kDnsOverHttps)) {
+    if (features::kDnsOverHttpsFallbackParam.Get()) {
+      default_secure_dns_mode = net::SecureDnsMode::kAutomatic;
+    } else {
+      default_secure_dns_mode = net::SecureDnsMode::kSecure;
+    }
+    default_doh_templates = features::kDnsOverHttpsTemplatesParam.Get();
+  }
+  std::string server_method;
+  absl::optional<std::vector<network::mojom::DnsOverHttpsServerPtr>>
+      servers_mojo;
+  if (!default_doh_templates.empty() &&
+      default_secure_dns_mode != net::SecureDnsMode::kOff) {
+    for (base::StringPiece server_template :
+         SplitStringPiece(default_doh_templates, " ", base::TRIM_WHITESPACE,
+                          base::SPLIT_WANT_NONEMPTY)) {
+      if (!net::dns_util::IsValidDohTemplate(server_template, &server_method)) {
+        continue;
+      }
+
+      bool use_post = server_method == "POST";
+
+      if (!servers_mojo.has_value()) {
+        servers_mojo = absl::make_optional<
+            std::vector<network::mojom::DnsOverHttpsServerPtr>>();
+      }
+
+      network::mojom::DnsOverHttpsServerPtr server_mojo =
+          network::mojom::DnsOverHttpsServer::New();
+      server_mojo->server_template = std::string(server_template);
+      server_mojo->use_post = use_post;
+      servers_mojo->emplace_back(std::move(server_mojo));
+    }
+  }
+
+  bool additional_dns_query_types_enabled = true;
+
+  // Configure the stub resolver. This must be done after the system
+  // NetworkContext is created, but before anything has the chance to use it.
+  content::GetNetworkService()->ConfigureStubHostResolver(
+      base::FeatureList::IsEnabled(features::kAsyncDns),
+      default_secure_dns_mode, std::move(servers_mojo),
+      additional_dns_query_types_enabled);
+
+  std::string app_name = electron::Browser::Get()->GetName();
+#if defined(OS_MAC)
+  KeychainPassword::GetServiceName() = app_name + " Safe Storage";
+  KeychainPassword::GetAccountName() = app_name;
+#endif
+
+#if defined(OS_WIN) || defined(OS_MAC)
+  // The OSCrypt keys are process bound, so if network service is out of
+  // process, send it the required key.
+  if (content::IsOutOfProcessNetworkService() &&
+      electron::fuses::IsCookieEncryptionEnabled()) {
+    network_service->SetEncryptionKey(OSCrypt::GetRawEncryptionKey());
+  }
+#endif
+
+#if DCHECK_IS_ON()
+  electron::safestorage::SetElectronCryptoReady(true);
+#endif
 }
 
 network::mojom::NetworkContextParamsPtr

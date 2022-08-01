@@ -10,8 +10,7 @@ import tempfile
 sys.path.append(
   os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + "/../.."))
 
-from lib.config import s3_config
-from lib.util import download, rm_rf, s3put, safe_mkdir
+from lib.util import download, rm_rf, store_artifact, safe_mkdir
 
 DIST_URL = 'https://electronjs.org/headers/'
 
@@ -30,9 +29,8 @@ def main():
   ]
 
   if args.target_dir is None:
-    bucket, access_key, secret_key = s3_config()
-    s3put(bucket, access_key, secret_key, directory,
-          'atom-shell/dist/{0}'.format(args.version), checksums)
+    store_artifact(directory, 'headers/dist/{0}'.format(args.version),
+                   checksums)
   else:
     copy_files(checksums, args.target_dir)
 
@@ -88,7 +86,7 @@ def create_checksum(algorithm, directory, filename, files):
   lines = []
   for path in files:
     h = hashlib.new(algorithm)
-    with open(path, 'r') as f:
+    with open(path, 'rb') as f:
       h.update(f.read())
       lines.append(h.hexdigest() + '  ' + os.path.relpath(path, directory))
 

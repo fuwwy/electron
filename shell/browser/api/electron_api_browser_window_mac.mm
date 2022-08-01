@@ -19,11 +19,12 @@ namespace electron {
 
 namespace api {
 
-void BrowserWindow::OverrideNSWindowContentView(InspectableWebContents* iwc) {
+void BrowserWindow::OverrideNSWindowContentView(
+    InspectableWebContentsView* view) {
   // Make NativeWindow use a NSView as content view.
   static_cast<NativeWindowMac*>(window())->OverrideNSWindowContentView();
   // Add webview to contentView.
-  NSView* webView = iwc->GetView()->GetNativeView().GetNativeNSView();
+  NSView* webView = view->GetNativeView().GetNativeNSView();
   NSView* contentView =
       [window()->GetNativeWindow().GetNativeNSWindow() contentView];
   [webView setFrame:[contentView bounds]];
@@ -36,16 +37,9 @@ void BrowserWindow::OverrideNSWindowContentView(InspectableWebContents* iwc) {
   [contentView viewDidMoveToWindow];
 }
 
-void BrowserWindow::OnDevToolsResized() {
-  UpdateDraggableRegions(draggable_regions_);
-}
-
 void BrowserWindow::UpdateDraggableRegions(
     const std::vector<mojom::DraggableRegionPtr>& regions) {
-  if (window_->has_frame())
-    return;
-
-  if (!web_contents())
+  if (window_->has_frame() || !web_contents())
     return;
 
   // All ControlRegionViews should be added as children of the WebContentsView,
@@ -70,23 +64,24 @@ void BrowserWindow::UpdateDraggableRegions(
 
   // Draggable regions are implemented by having the whole web view draggable
   // and overlaying regions that are not draggable.
-  if (&draggable_regions_ != &regions) {
-    draggable_regions_.clear();
-    for (const auto& r : regions)
-      draggable_regions_.push_back(r.Clone());
-  }
-
-  auto browser_views = window_->browser_views();
-  for (NativeBrowserView* view : browser_views) {
-    view->UpdateDraggableRegions(draggable_regions_);
-  }
+  if (&draggable_regions_ != &regions)
+    draggable_regions_ = mojo::Clone(regions);
 
   std::vector<gfx::Rect> drag_exclude_rects;
   if (regions.empty()) {
-    drag_exclude_rects.push_back(gfx::Rect(0, 0, webViewWidth, webViewHeight));
+    drag_exclude_rects.emplace_back(0, 0, webViewWidth, webViewHeight);
   } else {
     drag_exclude_rects = CalculateNonDraggableRegions(
         DraggableRegionsToSkRegion(regions), webViewWidth, webViewHeight);
+  }
+
+  // Draggable regions on BrowserViews are independent from those of
+  // BrowserWindows, so if a BrowserView with different draggable regions than
+  // the BrowserWindow it belongs to is superimposed on top of that window, the
+  // draggable regions of the BrowserView take precedence over those of the
+  // BrowserWindow.
+  for (NativeBrowserView* view : window_->browser_views()) {
+    view->UpdateDraggableRegions(view->GetDraggableRegions());
   }
 
   // Create and add a ControlRegionView for each region that needs to be

@@ -22,22 +22,19 @@ However, the patch would need to be reviewed by the security team, as it
 does touch a security-sensitive class.
 
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index f9511932779e8e72460d581e2999c121255eec06..b85f1869b42d7b485bba5872d70da6c0d5f17d82 100644
+index c548ee479edb5334032ea191cacbb9292197a9a7..0e0e36b8e1d492619ec7dfc64452684d1f239792 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
-@@ -408,6 +408,11 @@ class RendererSandboxedProcessLauncherDelegate
-   {
-   }
+@@ -431,10 +431,18 @@ class RendererSandboxedProcessLauncherDelegate
+  public:
+   RendererSandboxedProcessLauncherDelegate() = default;
  
 +#if BUILDFLAG(USE_ZYGOTE_HANDLE)
 +  RendererSandboxedProcessLauncherDelegate(bool use_zygote):
 +    use_zygote_(use_zygote) {}
 +#endif
 +
-   ~RendererSandboxedProcessLauncherDelegate() override {}
- 
- #if defined(OS_WIN)
-@@ -429,6 +434,9 @@ class RendererSandboxedProcessLauncherDelegate
+   ~RendererSandboxedProcessLauncherDelegate() override = default;
  
  #if BUILDFLAG(USE_ZYGOTE_HANDLE)
    ZygoteHandle GetZygote() override {
@@ -47,38 +44,41 @@ index f9511932779e8e72460d581e2999c121255eec06..b85f1869b42d7b485bba5872d70da6c0
      const base::CommandLine& browser_command_line =
          *base::CommandLine::ForCurrentProcess();
      base::CommandLine::StringType renderer_prefix =
-@@ -443,10 +451,13 @@ class RendererSandboxedProcessLauncherDelegate
+@@ -452,6 +460,11 @@ class RendererSandboxedProcessLauncherDelegate
+   sandbox::policy::SandboxType GetSandboxType() override {
      return sandbox::policy::SandboxType::kRenderer;
    }
- 
--#if defined(OS_WIN)
-  private:
-+#if defined(OS_WIN)
-   const bool renderer_code_integrity_enabled_;
- #endif
++
++ private:
 +#if BUILDFLAG(USE_ZYGOTE_HANDLE)
 +  bool use_zygote_ = true;
 +#endif
  };
  
- const char kSessionStorageHolderKey[] = "kSessionStorageHolderKey";
-@@ -1843,11 +1854,18 @@ bool RenderProcessHostImpl::Init() {
-       cmd_line->PrependWrapper(renderer_prefix);
-     AppendRendererCommandLine(cmd_line.get());
- 
+ #if defined(OS_WIN)
+@@ -463,6 +476,9 @@ class RendererSandboxedProcessLauncherDelegateWin
+                                               bool is_jit_disabled)
+       : renderer_code_integrity_enabled_(
+             GetContentClient()->browser()->IsRendererCodeIntegrityEnabled()) {
++#if BUILDFLAG(USE_ZYGOTE_HANDLE)
++    use_zygote_ = !cmd_line->HasSwitch(switches::kNoZygote);
++#endif
+     if (is_jit_disabled) {
+       dynamic_code_can_be_disabled_ = true;
+       return;
+@@ -2014,9 +2030,15 @@ bool RenderProcessHostImpl::Init() {
+     std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
+         std::make_unique<RendererSandboxedProcessLauncherDelegateWin>(
+             cmd_line.get(), IsJitDisabled());
++#else
 +#if BUILDFLAG(USE_ZYGOTE_HANDLE)
 +    bool use_zygote = !cmd_line->HasSwitch(switches::kNoZygote);
-+    auto delegate = std::make_unique<RendererSandboxedProcessLauncherDelegate>(use_zygote);
-+#else
-+    auto delegate = std::make_unique<RendererSandboxedProcessLauncherDelegate>();
++    std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
++        std::make_unique<RendererSandboxedProcessLauncherDelegate>(use_zygote);
+ #else
+     std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
+         std::make_unique<RendererSandboxedProcessLauncherDelegate>();
 +#endif
-+
+ #endif
      // Spawn the child process asynchronously to avoid blocking the UI thread.
      // As long as there's no renderer prefix, we can use the zygote process
-     // at this stage.
-     child_process_launcher_ = std::make_unique<ChildProcessLauncher>(
--        std::make_unique<RendererSandboxedProcessLauncherDelegate>(),
-+        std::move(delegate),
-         std::move(cmd_line), GetID(), this, std::move(mojo_invitation_),
-         base::BindRepeating(&RenderProcessHostImpl::OnMojoError, id_),
-         GetV8SnapshotFilesToPreload());

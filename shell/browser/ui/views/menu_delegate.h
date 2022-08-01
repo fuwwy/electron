@@ -46,8 +46,9 @@ class MenuDelegate : public views::MenuDelegate {
   bool IsTriggerableEvent(views::MenuItemView* source,
                           const ui::Event& e) override;
   bool GetAccelerator(int id, ui::Accelerator* accelerator) const override;
-  base::string16 GetLabel(int id) const override;
-  void GetLabelStyle(int id, LabelStyle* style) const override;
+  std::u16string GetLabel(int id) const override;
+  const gfx::FontList* GetLabelFontList(int id) const override;
+  absl::optional<SkColor> GetLabelColor(int id) const override;
   bool IsCommandEnabled(int id) const override;
   bool IsCommandVisible(int id) const override;
   bool IsItemChecked(int id) const override;
@@ -62,13 +63,13 @@ class MenuDelegate : public views::MenuDelegate {
 
  private:
   MenuBar* menu_bar_;
-  int id_;
+  int id_ = -1;
   std::unique_ptr<views::MenuDelegate> adapter_;
   std::unique_ptr<views::MenuRunner> menu_runner_;
 
   // The menu button to switch to.
   views::MenuButton* button_to_open_ = nullptr;
-  bool hold_first_switch_;
+  bool hold_first_switch_ = false;
 
   base::ObserverList<Observer>::Unchecked observers_;
 

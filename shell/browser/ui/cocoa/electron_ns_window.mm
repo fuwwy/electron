@@ -35,7 +35,7 @@ bool ScopedDisableResize::disable_resize_ = false;
   if ((self = [super initWithContentRect:ui::kWindowSizeDeterminedLater
                                styleMask:styleMask
                                  backing:NSBackingStoreBuffered
-                                   defer:YES])) {
+                                   defer:NO])) {
     shell_ = shell;
   }
   return self;
@@ -159,6 +159,15 @@ bool ScopedDisableResize::disable_resize_ = false;
   return [[self contentView] superview];
 }
 
+- (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item {
+  // By default "Close Window" is always disabled when window has no title, to
+  // support closing a window without title we need to manually do menu item
+  // validation. This code path is used by the "roundedCorners" option.
+  if ([item action] == @selector(performClose:))
+    return shell_->IsClosable();
+  return [super validateUserInterfaceItem:item];
+}
+
 // By overriding this built-in method the corners of the vibrant view (if set)
 // will be smooth.
 - (NSImage*)_cornerMask {
@@ -195,7 +204,10 @@ bool ScopedDisableResize::disable_resize_ = false;
   if (shell_->title_bar_style() ==
       electron::NativeWindowMac::TitleBarStyle::kCustomButtonsOnHover) {
     [[self delegate] windowShouldClose:self];
-  } else if (shell_->IsSimpleFullScreen()) {
+  } else if (!([self styleMask] & NSWindowStyleMaskTitled)) {
+    // performClose does not work for windows without title, so we have to
+    // emulate its behavior. This code path is used by "simpleFullscreen" and
+    // "roundedCorners" options.
     if ([[self delegate] respondsToSelector:@selector(windowShouldClose:)]) {
       if (![[self delegate] windowShouldClose:self])
         return;
@@ -223,11 +235,23 @@ bool ScopedDisableResize::disable_resize_ = false;
   if (is_simple_fs || always_simple_fs) {
     shell_->SetSimpleFullScreen(!is_simple_fs);
   } else {
-    bool maximizable = shell_->IsMaximizable();
-    [super toggleFullScreen:sender];
+    if (shell_->IsVisible()) {
+      // Until 10.13, AppKit would obey a call to -toggleFullScreen: made inside
+      // windowDidEnterFullScreen & windowDidExitFullScreen. Starting in 10.13,
+      // it behaves as though the transition is still in progress and just emits
+      // "not in a fullscreen state" when trying to exit fullscreen in the same
+      // runloop that entered it. To handle this, invoke -toggleFullScreen:
+      // asynchronously.
+      [super performSelector:@selector(toggleFullScreen:)
+                  withObject:nil
+                  afterDelay:0];
+    } else {
+      [super toggleFullScreen:sender];
+    }
 
     // Exiting fullscreen causes Cocoa to redraw the NSWindow, which resets
     // the enabled state for NSWindowZoomButton. We need to persist it.
+    bool maximizable = shell_->IsMaximizable();
     shell_->SetMaximizable(maximizable);
   }
 }

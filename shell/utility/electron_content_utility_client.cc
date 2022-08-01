@@ -77,8 +77,7 @@ auto RunProxyResolver(
 
 }  // namespace
 
-ElectronContentUtilityClient::ElectronContentUtilityClient()
-    : utility_process_running_elevated_(false) {
+ElectronContentUtilityClient::ElectronContentUtilityClient() {
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW) && defined(OS_WIN)
   printing_handler_ = std::make_unique<printing::PrintingHandler>();
 #endif
@@ -106,19 +105,6 @@ void ElectronContentUtilityClient::ExposeInterfacesToBrowser(
         base::ThreadTaskRunnerHandle::Get());
 #endif
   }
-}
-
-bool ElectronContentUtilityClient::OnMessageReceived(
-    const IPC::Message& message) {
-  if (utility_process_running_elevated_)
-    return false;
-
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW) && defined(OS_WIN)
-  if (printing_handler_->OnMessageReceived(message))
-    return true;
-#endif
-
-  return false;
 }
 
 void ElectronContentUtilityClient::RegisterMainThreadServices(

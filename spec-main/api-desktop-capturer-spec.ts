@@ -17,7 +17,7 @@ ifdescribe(!process.arch.includes('arm') && process.platform !== 'win32')('deskt
   let w: BrowserWindow;
 
   before(async () => {
-    w = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: true } });
+    w = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: true, contextIsolation: false } });
     await w.loadURL('about:blank');
   });
 
@@ -96,7 +96,7 @@ ifdescribe(!process.arch.includes('arm') && process.platform !== 'win32')('deskt
   });
 
   it('disabling thumbnail should return empty images', async () => {
-    const w2 = new BrowserWindow({ show: false, width: 200, height: 200 });
+    const w2 = new BrowserWindow({ show: false, width: 200, height: 200, webPreferences: { contextIsolation: false } });
     const wShown = emittedOnce(w2, 'show');
     w2.show();
     await wShown;
@@ -116,7 +116,7 @@ ifdescribe(!process.arch.includes('arm') && process.platform !== 'win32')('deskt
   });
 
   it('getMediaSourceId should match DesktopCapturerSource.id', async () => {
-    const w = new BrowserWindow({ show: false, width: 100, height: 100 });
+    const w = new BrowserWindow({ show: false, width: 100, height: 100, webPreferences: { contextIsolation: false } });
     const wShown = emittedOnce(w, 'show');
     const wFocused = emittedOnce(w, 'focus');
     w.show();
@@ -144,6 +144,42 @@ ifdescribe(!process.arch.includes('arm') && process.platform !== 'win32')('deskt
       return source.id === mediaSourceId;
     });
     expect(mediaSourceId).to.equal(foundSource!.id);
+  });
+
+  it('getSources should not incorrectly duplicate window_id', async () => {
+    const w = new BrowserWindow({ show: false, width: 100, height: 100, webPreferences: { contextIsolation: false } });
+    const wShown = emittedOnce(w, 'show');
+    const wFocused = emittedOnce(w, 'focus');
+    w.show();
+    w.focus();
+    await wShown;
+    await wFocused;
+
+    // ensure window_id isn't duplicated in getMediaSourceId,
+    // which uses a different method than getSources
+    const mediaSourceId = w.getMediaSourceId();
+    const ids = mediaSourceId.split(':');
+    expect(ids[1]).to.not.equal(ids[2]);
+
+    const sources = await getSources({
+      types: ['window'],
+      thumbnailSize: { width: 0, height: 0 }
+    });
+    w.destroy();
+
+    // TODO(julien.isorce): investigate why |sources| is empty on the linux
+    // bots while it is not on my workstation, as expected, with and without
+    // the --ci parameter.
+    if (process.platform === 'linux' && sources.length === 0) {
+      it.skip('desktopCapturer.getSources returned an empty source list');
+      return;
+    }
+
+    expect(sources).to.be.an('array').that.is.not.empty();
+    for (const source of sources) {
+      const sourceIds = source.id.split(':');
+      expect(sourceIds[1]).to.not.equal(sourceIds[2]);
+    }
   });
 
   // TODO(deepak1556): currently fails on all ci, enable it after upgrade.

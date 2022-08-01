@@ -16,14 +16,13 @@ sys.path.append(
   os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + "/../.."))
 
 from zipfile import ZipFile
-from lib.config import PLATFORM, get_target_arch,  get_env_var, s3_config, \
+from lib.config import PLATFORM, get_target_arch, \
                        get_zip_name, enable_verbose_mode, get_platform_key
 from lib.util import get_electron_branding, execute, get_electron_version, \
-                     s3put, get_electron_exec, get_out_dir, \
+                     store_artifact, get_electron_exec, get_out_dir, \
                      SRC_DIR, ELECTRON_DIR, TS_NODE
 
 
-ELECTRON_REPO = 'electron/electron'
 ELECTRON_VERSION = get_electron_version()
 
 PROJECT_NAME = get_electron_branding()['project_name']
@@ -38,13 +37,15 @@ PDB_NAME = get_zip_name(PROJECT_NAME, ELECTRON_VERSION, 'pdb')
 DEBUG_NAME = get_zip_name(PROJECT_NAME, ELECTRON_VERSION, 'debug')
 TOOLCHAIN_PROFILE_NAME = get_zip_name(PROJECT_NAME, ELECTRON_VERSION,
                                       'toolchain-profile')
+CXX_OBJECTS_NAME = get_zip_name(PROJECT_NAME, ELECTRON_VERSION,
+                                      'libcxx_objects')
 
 
 def main():
   args = parse_args()
   if args.verbose:
     enable_verbose_mode()
-  if args.upload_to_s3:
+  if args.upload_to_storage:
     utcnow = datetime.datetime.utcnow()
     args.upload_timestamp = utcnow.strftime('%Y%m%d')
 
@@ -61,7 +62,7 @@ def main():
   if not release['draft']:
     tag_exists = True
 
-  if not args.upload_to_s3:
+  if not args.upload_to_storage:
     assert release['exists'], \
           'Release does not exist; cannot upload to GitHub!'
     assert tag_exists == args.overwrite, \
@@ -96,6 +97,21 @@ def main():
     shutil.copy2(os.path.join(OUT_DIR, 'debug.zip'), debug_zip)
     upload_electron(release, debug_zip, args)
 
+    # Upload libcxx_objects.zip for linux only
+    libcxx_objects = get_zip_name('libcxx-objects', ELECTRON_VERSION)
+    libcxx_objects_zip = os.path.join(OUT_DIR, libcxx_objects)
+    shutil.copy2(os.path.join(OUT_DIR, 'libcxx_objects.zip'),
+        libcxx_objects_zip)
+    upload_electron(release, libcxx_objects_zip, args)
+
+    # Upload headers.zip and abi_headers.zip as non-platform specific
+    if get_target_arch() == "x64":
+      cxx_headers_zip = os.path.join(OUT_DIR, 'libcxx_headers.zip')
+      upload_electron(release, cxx_headers_zip, args)
+
+      abi_headers_zip = os.path.join(OUT_DIR, 'libcxxabi_headers.zip')
+      upload_electron(release, abi_headers_zip, args)
+
   # Upload free version of ffmpeg.
   ffmpeg = get_zip_name('ffmpeg', ELECTRON_VERSION)
   ffmpeg_zip = os.path.join(OUT_DIR, ffmpeg)
@@ -124,7 +140,7 @@ def main():
       OUT_DIR, 'hunspell_dictionaries.zip')
     upload_electron(release, hunspell_dictionaries_zip, args)
 
-  if not tag_exists and not args.upload_to_s3:
+  if not tag_exists and not args.upload_to_storage:
     # Upload symbols to symbol server.
     run_python_upload_script('upload-symbols.py')
     if PLATFORM == 'win32':
@@ -149,9 +165,9 @@ def parse_args():
   parser.add_argument('-p', '--publish-release',
                       help='Publish the release',
                       action='store_true')
-  parser.add_argument('-s', '--upload_to_s3',
-                      help='Upload assets to s3 bucket',
-                      dest='upload_to_s3',
+  parser.add_argument('-s', '--upload_to_storage',
+                      help='Upload assets to azure bucket',
+                      dest='upload_to_storage',
                       action='store_true',
                       default=False,
                       required=False)
@@ -316,16 +332,13 @@ def upload_electron(release, file_path, args):
   except NonZipFileError:
     pass
 
-  # if upload_to_s3 is set, skip github upload.
-  if args.upload_to_s3:
-    bucket, access_key, secret_key = s3_config()
-    key_prefix = 'electron-artifacts/{0}_{1}'.format(args.version,
+  # if upload_to_storage is set, skip github upload.
+  # todo (vertedinde): migrate this variable to upload_to_storage
+  if args.upload_to_storage:
+    key_prefix = 'release-builds/{0}_{1}'.format(args.version,
                                                      args.upload_timestamp)
-    s3put(bucket, access_key, secret_key, os.path.dirname(file_path),
-          key_prefix, [file_path])
+    store_artifact(os.path.dirname(file_path), key_prefix, [file_path])
     upload_sha256_checksum(args.version, file_path, key_prefix)
-    s3url = 'https://gh-contractor-zcbenz.s3.amazonaws.com'
-    print('{0} uploaded to {1}/{2}/{0}'.format(filename, s3url, key_prefix))
     return
 
   # Upload the file.
@@ -345,10 +358,9 @@ def upload_io_to_github(release, filename, filepath, version):
 
 
 def upload_sha256_checksum(version, file_path, key_prefix=None):
-  bucket, access_key, secret_key = s3_config()
   checksum_path = '{}.sha256sum'.format(file_path)
   if key_prefix is None:
-    key_prefix = 'atom-shell/tmp/{0}'.format(version)
+    key_prefix = 'checksums-scratchpad/{0}'.format(version)
   sha256 = hashlib.sha256()
   with open(file_path, 'rb') as f:
     sha256.update(f.read())
@@ -356,16 +368,7 @@ def upload_sha256_checksum(version, file_path, key_prefix=None):
   filename = os.path.basename(file_path)
   with open(checksum_path, 'w') as checksum:
     checksum.write('{} *{}'.format(sha256.hexdigest(), filename))
-  s3put(bucket, access_key, secret_key, os.path.dirname(checksum_path),
-        key_prefix, [checksum_path])
-
-
-def auth_token():
-  token = get_env_var('GITHUB_TOKEN')
-  message = ('Error: Please set the $ELECTRON_GITHUB_TOKEN '
-             'environment variable, which is your personal token')
-  assert token, message
-  return token
+  store_artifact(os.path.dirname(checksum_path), key_prefix, [checksum_path])
 
 
 def get_release(version):

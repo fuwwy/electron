@@ -9,15 +9,11 @@
 #include "gin/handle.h"
 #include "gin/wrappable.h"
 
-namespace IPC {
-class Message;
-}
-
 namespace gin_helper {
 
 class Event : public gin::Wrappable<Event> {
  public:
-  using InvokeCallback = electron::mojom::ElectronBrowser::InvokeCallback;
+  using InvokeCallback = electron::mojom::ElectronApiIPC::InvokeCallback;
 
   static gin::WrapperInfo kWrapperInfo;
 

@@ -76,7 +76,7 @@ Writes `markup` to the clipboard.
 ```js
 const { clipboard } = require('electron')
 
-clipboard.writeHTML('<b>Hi</b')
+clipboard.writeHTML('<b>Hi</b>')
 ```
 
 ### `clipboard.readImage([type])`
@@ -197,9 +197,9 @@ Returns `Boolean` - Whether the clipboard supports the specified `format`.
 ```js
 const { clipboard } = require('electron')
 
-const hasFormat = clipboard.has('<p>selection</p>')
+const hasFormat = clipboard.has('public/utf8-plain-text')
 console.log(hasFormat)
-// 'true' or 'false
+// 'true' or 'false'
 ```
 
 ### `clipboard.read(format)` _Experimental_
@@ -207,6 +207,10 @@ console.log(hasFormat)
 * `format` String
 
 Returns `String` - Reads `format` type from the clipboard.
+
+`format` should contain valid ASCII characters and have `/` separator.
+`a/c`, `a/bc` are valid formats while `/abc`, `abc/`, `a/`, `/a`, `a`
+are not valid.
 
 ### `clipboard.readBuffer(format)` _Experimental_
 
@@ -218,9 +222,9 @@ Returns `Buffer` - Reads `format` type from the clipboard.
 const { clipboard } = require('electron')
 
 const buffer = Buffer.from('this is binary', 'utf8')
-clipboard.writeBuffer('public.utf8-plain-text', buffer)
+clipboard.writeBuffer('public/utf8-plain-text', buffer)
 
-const ret = clipboard.readBuffer('public.utf8-plain-text')
+const ret = clipboard.readBuffer('public/utf8-plain-text')
 
 console.log(buffer.equals(out))
 // true
@@ -238,7 +242,7 @@ Writes the `buffer` into the clipboard as `format`.
 const { clipboard } = require('electron')
 
 const buffer = Buffer.from('writeBuffer', 'utf8')
-clipboard.writeBuffer('public.utf8-plain-text', buffer)
+clipboard.writeBuffer('public/utf8-plain-text', buffer)
 ```
 
 ### `clipboard.write(data[, type])`
